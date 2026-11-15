@@ -6,14 +6,33 @@ const chunkSize = 16 * 1024 - 1
 const maxMetadataSize = 4096
 const bufferLimit = 512 * 1024
 const lowBuffer = 128 * 1024
+const writeWindow = 32 * chunkSize
 
-const frameType = { start: 1, chunk: 2, finish: 3, abort: 4 } as const
+// The original frames still work with older peers for files up to 25 MiB.
+const frameType = {
+  start: 1, chunk: 2, finish: 3, abort: 4,
+  canSave: 5, offer: 6, accepted: 7, declined: 8, written: 9, saved: 10, failed: 11,
+} as const
 
 type FileMetadata = { name: string; size: number }
-type IncomingFile = FileMetadata & { chunks: Uint8Array<ArrayBuffer>[]; received: number }
+type MemoryFile = FileMetadata & { mode: 'memory'; chunks: Uint8Array<ArrayBuffer>[]; received: number }
+type OfferedFile = FileMetadata & { mode: 'offer'; id: number; choosing: boolean }
+type DiskFile = FileMetadata & {
+  mode: 'disk'
+  id: number
+  writer: WritableStreamDefaultWriter
+  queued: number
+  received: number
+  windowEnd: number
+  saving: boolean
+}
+
+type SavePicker = (options: { suggestedName: string }) => Promise<FileSystemFileHandle>
+
 export type ReceiveUpdate =
+  | { status: 'offered'; name: string; size: number; choosing: boolean }
   | { status: 'receiving'; name: string; size: number; received: number }
-  | { status: 'ready'; name: string; blob: Blob }
+  | { status: 'ready'; name: string; blob?: Blob }
   | { status: 'interrupted'; message: Message }
 
 function makeFrame(type: number, payload?: Uint8Array): Uint8Array<ArrayBuffer> {
@@ -67,37 +86,185 @@ export async function sendFile(channel: RTCDataChannel, file: File, signal: Abor
     channel.send(makeFrame(frameType.finish))
     await waitForBuffer(channel, 0, signal)
   } catch (error) {
-    if (!signal.aborted && channel.readyState === 'open') {
-      try {
-        channel.send(makeFrame(frameType.abort))
-      } catch {
-        // Closing the connection also discards an incomplete transfer.
-        channel.close()
-      }
+    if (!signal.aborted) sendControl(channel, frameType.abort)
+    throw error
+  }
+}
+
+export function advertisesLargeFiles(frame: ArrayBuffer): boolean {
+  return frame.byteLength === 1 && new Uint8Array(frame)[0] === frameType.canSave
+}
+
+function sendControl(channel: RTCDataChannel, type: number, id?: number) {
+  if (channel.readyState !== 'open') return
+  const frame = new Uint8Array(id === undefined ? 1 : 5)
+  frame[0] = type
+  if (id !== undefined) new DataView(frame.buffer).setUint32(1, id)
+  try {
+    channel.send(frame)
+  } catch {
+    // Closing the channel also tells the peer to discard an incomplete transfer.
+    channel.close()
+  }
+}
+
+function waitForFileReply(
+  channel: RTCDataChannel, signal: AbortSignal, id: number, expected: number, send: () => void,
+): Promise<boolean> {
+  signal.throwIfAborted()
+  return new Promise((resolve, reject) => {
+    function cleanup() {
+      channel.removeEventListener('message', onMessage)
+      signal.removeEventListener('abort', onAbort)
     }
+    function onAbort() {
+      cleanup()
+      reject(signal.reason)
+    }
+    function onMessage(event: MessageEvent) {
+      if (!(event.data instanceof ArrayBuffer) || event.data.byteLength !== 5) return
+      const reply = new DataView(event.data)
+      if (reply.getUint32(1) !== id) return
+      const type = reply.getUint8(0)
+      if (type !== expected && type !== frameType.failed && type !== frameType.declined) return
+      cleanup()
+      if (type === expected) resolve(true)
+      else if (type === frameType.declined && expected === frameType.accepted) resolve(false)
+      else reject(new AppError('remoteFileSaveFailed'))
+    }
+
+    channel.addEventListener('message', onMessage)
+    signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      send()
+    } catch (error) {
+      cleanup()
+      reject(error)
+    }
+  })
+}
+
+export async function sendLargeFile(
+  channel: RTCDataChannel, file: File, signal: AbortSignal, onAccepted: () => void,
+): Promise<boolean> {
+  const id = crypto.getRandomValues(new Uint32Array(1))[0]
+  const metadata = new TextEncoder().encode(JSON.stringify({ name: file.name, size: file.size, id }))
+  if (metadata.byteLength > maxMetadataSize) throw new AppError('fileNameTooLong')
+
+  try {
+    const accepted = await waitForFileReply(channel, signal, id, frameType.accepted, () => {
+      channel.send(makeFrame(frameType.offer, metadata))
+    })
+    if (!accepted) return false
+    onAccepted()
+
+    for (let offset = 0; offset < file.size; offset += writeWindow) {
+      signal.throwIfAborted()
+      const data = new Uint8Array(await file.slice(offset, offset + writeWindow).arrayBuffer())
+      await waitForFileReply(channel, signal, id, frameType.written, () => {
+        for (let index = 0; index < data.length; index += chunkSize) {
+          channel.send(makeFrame(frameType.chunk, data.subarray(index, index + chunkSize)))
+        }
+      })
+    }
+
+    // A drained data channel does not tell us whether the destination was saved.
+    return await waitForFileReply(channel, signal, id, frameType.saved, () => {
+      channel.send(makeFrame(frameType.finish))
+    })
+  } catch (error) {
+    if (!signal.aborted) sendControl(channel, frameType.abort)
     throw error
   }
 }
 
 export class FileReceiver {
-  private active: IncomingFile | null = null
+  private active: MemoryFile | OfferedFile | DiskFile | null = null
+  private readonly savePicker = window.isSecureContext
+    ? (window as Window & { showSaveFilePicker?: SavePicker }).showSaveFilePicker
+    : undefined
+
+  constructor(private readonly channel: RTCDataChannel, private readonly update: (update: ReceiveUpdate | null) => void) {}
+
+  advertise() {
+    if (typeof this.savePicker === 'function') sendControl(this.channel, frameType.canSave)
+  }
+
+  decline() {
+    const file = this.active
+    if (!file || file.mode !== 'offer') return
+    this.active = null
+    sendControl(this.channel, frameType.declined, file.id)
+    this.update({ status: 'interrupted', message: 'fileSkipped' })
+  }
+
+  async chooseDestination() {
+    const file = this.active
+    if (!file || file.mode !== 'offer' || file.choosing || !this.savePicker) return
+    file.choosing = true
+    this.update({ status: 'offered', name: file.name, size: file.size, choosing: true })
+
+    let handle: FileSystemFileHandle
+    try {
+      const suggestedName = file.name.replace(/[\\/:*?"<>|\x00-\x1f\x7f]/g, '_').replace(/[. ]+$/, '') || 'download'
+      handle = await this.savePicker.call(window, { suggestedName })
+    } catch (error) {
+      if (this.active !== file) return
+      if (error instanceof DOMException && error.name === 'AbortError') this.decline()
+      else this.failDiskFile(file, 'fileSaveFailed')
+      return
+    }
+
+    if (this.active !== file) return
+    try {
+      const writer = (await handle.createWritable()).getWriter()
+      if (this.active !== file) {
+        await writer.abort()
+        return
+      }
+      this.active = {
+        mode: 'disk', id: file.id, name: handle.name, size: file.size, writer,
+        queued: 0, received: 0, windowEnd: Math.min(writeWindow, file.size), saving: false,
+      }
+      this.update({ status: 'receiving', name: handle.name, size: file.size, received: 0 })
+      sendControl(this.channel, frameType.accepted, file.id)
+    } catch {
+      this.failDiskFile(file, 'fileSaveFailed')
+    }
+  }
 
   accept(frame: ArrayBuffer): ReceiveUpdate | null {
     const bytes = new Uint8Array(frame)
     switch (bytes[0]) {
       case frameType.start: {
         const metadata = readMetadata(bytes.subarray(1))
-        if (!metadata) {
-          this.active = null
+        if (this.active || !metadata || metadata.size > maxFileSize) {
           return { status: 'interrupted', message: 'invalidFileInfo' }
         }
-        this.active = { ...metadata, chunks: [], received: 0 }
+        this.active = { ...metadata, mode: 'memory', chunks: [], received: 0 }
         return { status: 'receiving', ...metadata, received: 0 }
+      }
+      case frameType.offer: {
+        const metadata = readMetadata(bytes.subarray(1))
+        if (metadata?.id === undefined) {
+          this.channel.close()
+          return { status: 'interrupted', message: 'invalidFileInfo' }
+        }
+        if (this.active || typeof this.savePicker !== 'function' || metadata.size <= maxFileSize) {
+          sendControl(this.channel, frameType.failed, metadata.id)
+          return { status: 'interrupted', message: 'invalidFileInfo' }
+        }
+        this.active = { ...metadata, id: metadata.id, mode: 'offer', choosing: false }
+        return { status: 'offered', name: metadata.name, size: metadata.size, choosing: false }
       }
       case frameType.chunk: {
         const file = this.active
-        if (!file) return null
+        if (!file || file.mode === 'offer') return null
         const chunk = bytes.subarray(1)
+        if (file.mode === 'disk') {
+          this.writeChunk(file, chunk)
+          return null
+        }
         const received = file.received + chunk.byteLength
         if (chunk.byteLength === 0 || chunk.byteLength > chunkSize || received > file.size) {
           return this.interrupt('fileSizeMismatch')
@@ -110,7 +277,12 @@ export class FileReceiver {
       }
       case frameType.finish: {
         const file = this.active
-        if (!file) return null
+        if (!file || file.mode === 'offer') return null
+        if (file.mode === 'disk') {
+          if (bytes.byteLength !== 1 || file.received !== file.size) this.failDiskFile(file, 'incompleteFile')
+          else if (!file.saving) void this.finishDiskFile(file)
+          return null
+        }
         if (file.received !== file.size || bytes.byteLength !== 1) {
           return this.interrupt('incompleteFile')
         }
@@ -125,13 +297,57 @@ export class FileReceiver {
   }
 
   interrupt(message: Message = 'fileInterrupted'): ReceiveUpdate | null {
-    if (!this.active) return null
+    const file = this.active
+    if (!file || (file.mode === 'disk' && file.saving)) return null
     this.active = null
+    if (file.mode === 'disk') void file.writer.abort().catch(() => {})
     return { status: 'interrupted', message }
+  }
+
+  private writeChunk(file: DiskFile, chunk: Uint8Array<ArrayBuffer>) {
+    const expectedSize = Math.min(chunkSize, file.size - file.queued)
+    if (!expectedSize || chunk.byteLength !== expectedSize || file.queued + chunk.byteLength > file.windowEnd) {
+      this.failDiskFile(file, 'fileSizeMismatch')
+      return
+    }
+    file.queued += chunk.byteLength
+    void file.writer.write(chunk).then(() => {
+      if (this.active !== file) return
+      const previousPercent = Math.floor((file.received / file.size) * 100)
+      file.received += chunk.byteLength
+      if (Math.floor((file.received / file.size) * 100) !== previousPercent) {
+        this.update({ status: 'receiving', name: file.name, size: file.size, received: file.received })
+      }
+      // Only grant another window after every byte of this one has been written.
+      if (file.received === file.windowEnd) {
+        file.windowEnd = Math.min(file.size, file.windowEnd + writeWindow)
+        sendControl(this.channel, frameType.written, file.id)
+      }
+    }, () => this.failDiskFile(file, 'fileSaveFailed'))
+  }
+
+  private async finishDiskFile(file: DiskFile) {
+    file.saving = true
+    try {
+      await file.writer.close()
+    } catch {
+      file.saving = false
+      this.failDiskFile(file, 'fileSaveFailed')
+      return
+    }
+    this.active = null
+    this.update({ status: 'ready', name: file.name })
+    sendControl(this.channel, frameType.saved, file.id)
+  }
+
+  private failDiskFile(file: OfferedFile | DiskFile, message: Message) {
+    if (this.active !== file || (file.mode === 'disk' && file.saving)) return
+    this.update(this.interrupt(message))
+    sendControl(this.channel, frameType.failed, file.id)
   }
 }
 
-function readMetadata(bytes: Uint8Array): FileMetadata | null {
+function readMetadata(bytes: Uint8Array): (FileMetadata & { id?: number }) | null {
   if (bytes.byteLength > maxMetadataSize) return null
 
   try {
@@ -140,9 +356,11 @@ function readMetadata(bytes: Uint8Array): FileMetadata | null {
       typeof value === 'object' && value !== null &&
       'name' in value && typeof value.name === 'string' && value.name.length > 0 &&
       'size' in value && typeof value.size === 'number' && Number.isSafeInteger(value.size) &&
-      value.size >= 0 && value.size <= maxFileSize
+      value.size >= 0
     ) {
-      return { name: value.name, size: value.size }
+      const id = 'id' in value && typeof value.id === 'number' && Number.isInteger(value.id) &&
+        value.id >= 0 && value.id <= 0xffffffff ? value.id : undefined
+      return { name: value.name, size: value.size, id }
     }
   } catch {
     return null

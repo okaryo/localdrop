@@ -5,7 +5,7 @@ import { FileDownload } from './FileDownload'
 import { useLanguage } from './LanguageProvider'
 import { PairingQr, QrCamera } from './QrExchange'
 import { QrFiles } from './QrFiles'
-import { FileReceiver, maxFileSize, sendFile } from './fileTransfer'
+import { advertisesLargeFiles, FileReceiver, maxFileSize, sendFile, sendLargeFile } from './fileTransfer'
 import type { ReceiveUpdate } from './fileTransfer'
 import { AppError, errorMessage } from './i18n'
 import type { Message as UiMessage } from './i18n'
@@ -148,13 +148,14 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const [ended, setEnded] = useState(false)
   const [opened, setOpened] = useState(false)
   const [connected, setConnected] = useState(false)
+  const [canSendLargeFiles, setCanSendLargeFiles] = useState(false)
   const [fileUpdate, setFileUpdate] = useState<ActiveFileUpdate | null>(null)
   const [completedFiles, setCompletedFiles] = useState<CompletedFile[]>([])
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [sendingFile, setSendingFile] = useState(false)
   const [fileStatus, setFileStatus] = useState<UiMessage | null>(null)
   const [fileError, setFileError] = useState<UiMessage | null>(null)
-  const oversizedFile = selectedFiles.find((file) => file.size > maxFileSize)
+  const oversizedFile = canSendLargeFiles ? undefined : selectedFiles.find((file) => file.size > maxFileSize)
   const displayedFileError: UiMessage | null = fileError ?? (oversizedFile
     ? { key: 'fileTooLarge', values: { name: oversizedFile.name, limit: fileLimitMiB } }
     : null)
@@ -163,7 +164,9 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     : scanStage === 'scanning' ? (isReceiver ? 'lookingForAnswer' : 'lookingForOffer') : status
 
   useEffect(() => () => {
-    if (session.current) closeSession(session.current)
+    const active = session.current
+    session.current = null
+    if (active) closeSession(active)
   }, [])
 
   function showFileUpdate(update: ReceiveUpdate | null) {
@@ -178,8 +181,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
   function end(active: Session, failure?: ConnectionFailure) {
     if (active.controller.signal.aborted) return
-    closeSession(active)
-    if (active.fileReceiver) showFileUpdate(active.fileReceiver.interrupt())
+    showFileUpdate(closeSession(active))
     setScanStage(null)
     setConnected(false)
     setEnded(true)
@@ -211,21 +213,28 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     active.channel = channel
     channel.binaryType = 'arraybuffer'
     const { signal } = active.controller
+    if (isReceiver) {
+      active.fileReceiver = new FileReceiver(channel, (update) => {
+        if (session.current === active) showFileUpdate(update)
+      })
+    }
 
     function onOpen() {
+      if (active.channelOpened) return
       active.channelOpened = true
       window.clearTimeout(active.connectionTimer)
       setError(null)
       setOpened(true)
       setConnected(true)
       setStatus('connected')
+      active.fileReceiver?.advertise()
     }
 
     channel.addEventListener('open', onOpen, { signal })
     channel.addEventListener('message', (event) => {
-      if (active.fileReceiver && event.data instanceof ArrayBuffer) {
-        showFileUpdate(active.fileReceiver.accept(event.data))
-      }
+      if (!(event.data instanceof ArrayBuffer)) return
+      if (active.fileReceiver) showFileUpdate(active.fileReceiver.accept(event.data))
+      else if (advertisesLargeFiles(event.data)) setCanSendLargeFiles(true)
     }, { signal })
     channel.addEventListener('close', () => {
       if (active.channelOpened) end(active)
@@ -241,7 +250,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       controller: new AbortController(),
       channel: null,
       sessionId,
-      fileReceiver: isReceiver ? new FileReceiver() : null,
+      fileReceiver: null,
     }
     session.current = active
     const { signal } = active.controller
@@ -367,16 +376,28 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
     setSendingFile(true)
     setFileError(null)
+    let skipped = 0
     try {
       for (const [index, file] of selectedFiles.entries()) {
-        setFileStatus({
+        const sendingStatus = {
           key: 'sendingFile', values: { index: index + 1, total: selectedFiles.length, name: file.name },
-        })
-        await sendFile(channel, file, active.controller.signal)
+        } as const
+        if (file.size > maxFileSize) {
+          setFileStatus({ key: 'waitingForFileDestination', values: { name: file.name } })
+          const saved = await sendLargeFile(channel, file, active.controller.signal, () => setFileStatus(sendingStatus))
+          if (!saved) skipped++
+        } else {
+          setFileStatus(sendingStatus)
+          await sendFile(channel, file, active.controller.signal)
+        }
       }
-      setFileStatus(selectedFiles.length === 1
-        ? 'fileSent'
-        : { key: 'filesSent', values: { count: selectedFiles.length } })
+      if (skipped) {
+        setFileStatus({ key: 'filesSentWithSkipped', values: { sent: selectedFiles.length - skipped, skipped } })
+      } else {
+        setFileStatus(selectedFiles.length === 1
+          ? 'fileSent'
+          : { key: 'filesSent', values: { count: selectedFiles.length } })
+      }
     } catch (cause) {
       setFileStatus(null)
       setFileError(active.controller.signal.aborted
@@ -503,7 +524,12 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       {opened && (
         <>
           {isReceiver ? (
-            <ReceivedFiles update={fileUpdate} completed={completedFiles} />
+            <ReceivedFiles
+              update={fileUpdate}
+              completed={completedFiles}
+              onChooseDestination={() => void session.current?.fileReceiver?.chooseDestination()}
+              onDecline={() => session.current?.fileReceiver?.decline()}
+            />
           ) : (
             <form className="file-transfer" onSubmit={transferFiles} aria-labelledby="file-heading">
               <h2 id="file-heading">{t('sendFiles')}</h2>
@@ -522,7 +548,9 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
                   }}
                 />
               </label>
-              <p id="file-size-limit">{t({ key: 'fileLimit', values: { limit: fileLimitMiB } })}</p>
+              <p id="file-size-limit">{t({
+                key: canSendLargeFiles ? 'largeFileLimitHint' : 'fileLimit', values: { limit: fileLimitMiB },
+              })}</p>
               {selectedFiles.length > 0 && (
                 <ol className="file-list" aria-label={t('filesSendOrder')}>
                   {selectedFiles.map((file, index) => <li key={index}>{file.name}</li>)}
@@ -551,18 +579,39 @@ function PairingHint({ device, children }: { device: 'sending' | 'receiving'; ch
   )
 }
 
-function ReceivedFiles({ update, completed }: { update: ActiveFileUpdate | null; completed: CompletedFile[] }) {
-  const { t } = useLanguage()
+function ReceivedFiles({ update, completed, onChooseDestination, onDecline }: {
+  update: ActiveFileUpdate | null
+  completed: CompletedFile[]
+  onChooseDestination: () => void
+  onDecline: () => void
+}) {
+  const { language, t } = useLanguage()
   return (
     <section className="file-transfer" aria-labelledby="file-heading">
       <h2 id="file-heading">{t('receiveFiles')}</h2>
       {!update && !completed.length && <p>{t('waitingForFiles')}</p>}
       {update?.status === 'interrupted' && <p className="error" role="alert">{t(update.message)}</p>}
+      {update?.status === 'offered' && (
+        <>
+          <p role="status">{t({ key: 'largeFileOffer', values: {
+            name: update.name, size: new Intl.NumberFormat(language, { maximumFractionDigits: 2 })
+              .format(update.size / (1024 * 1024)),
+          } })}</p>
+          <div className="actions">
+            <button type="button" disabled={update.choosing} onClick={onChooseDestination}>{t('chooseFileDestination')}</button>
+            <button className="secondary" type="button" disabled={update.choosing} onClick={onDecline}>{t('skipFile')}</button>
+          </div>
+        </>
+      )}
       {update?.status === 'receiving' && <FileProgress update={update} />}
       {completed.length > 0 && (
         <ul className="file-list" aria-label={t('receivedFiles')}>
           {completed.map((file, index) => (
-            <li key={index}><FileDownload name={file.name} blob={file.blob} /></li>
+            <li key={index}>
+              {file.blob ? <FileDownload name={file.name} blob={file.blob} /> : (
+                <span role="status">{t({ key: 'savedFile', values: { name: file.name } })}</span>
+              )}
+            </li>
           ))}
         </ul>
       )}
@@ -616,8 +665,10 @@ function LocalCode({ code, label }: { code: string; label: 'Offer' | 'Answer' })
 }
 
 function closeSession(active: Session) {
+  const interrupted = active.fileReceiver?.interrupt() ?? null
   active.controller.abort()
   window.clearTimeout(active.connectionTimer)
   active.channel?.close()
   active.peer.close()
+  return interrupted
 }

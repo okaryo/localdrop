@@ -60,14 +60,23 @@ Use **Start over** on both devices to create a fresh pair of codes.
 
 ## Test file transfer
 
-After connecting, select one or more files on the sending device. Each file
-can be up to 25 MiB. Choose **Send files** to send them one at a time in the
-order shown. The receiver can download each file as soon as it arrives.
+After connecting, select one or more files on the sending device. Choose
+**Send files** to send them one at a time in the order shown. For files up to
+25 MiB, the receiver can download each file as soon as it arrives.
+
+For larger files, open the page on the receiving device in Chrome over HTTPS
+or localhost. When the file appears, choose **Choose where to save** and pick
+a destination before the transfer starts. Compare the saved file with the
+original. Canceling the save dialog or choosing **Skip file** skips that file
+and continues the queue. Browsers without a save dialog still support files
+up to 25 MiB.
 
 To test an interruption, wait until the first file is available to download
 and disconnect either device while the next file is transferring. The
 receiver keeps completed downloads on the receiving screen and discards the
-unfinished file. Save completed files before choosing **Start over**.
+unfinished data. An interrupted large-file transfer does not commit its
+contents to the chosen destination. Save completed downloads before choosing
+**Start over**.
 
 ## Build
 
