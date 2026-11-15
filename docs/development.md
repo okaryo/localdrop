@@ -24,9 +24,21 @@ computer running Vite allows incoming connections to the dev server.
 
 Use **Use a text code** if your browser cannot access the camera or read the QR
 code. It lets you copy and paste the offer and answer manually, including on
-local HTTP. Share connection codes privately. Use **Start over** on both devices
-to create a fresh pair of codes. If the pages load but the peer connection
-fails, check Wi-Fi client isolation, firewall settings, and VPN settings.
+local HTTP. Share connection codes privately.
+
+If pairing stops, check the status shown in the app:
+
+- **Looking for the answer QR code…** means the camera is waiting for a readable
+  code. Keep the entire code in the camera guide, or try the text option.
+- **Could not apply the answer** means the browser rejected the answer. Check
+  that it came from the offer still shown on the receiving device.
+- **WebRTC connection timed out** means the answer was applied but no direct
+  connection was established. Check Wi-Fi client isolation, firewall settings,
+  and VPN settings.
+- **Data channel did not open** means WebRTC found a network path but could not
+  open the channel for messages and files.
+
+Use **Start over** on both devices to create a fresh pair of codes.
 
 ## Test file transfer
 

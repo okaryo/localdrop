@@ -22,13 +22,16 @@ export function PairingQr({ code, label }: { code: string; label: 'Offer' | 'Ans
 }
 
 export function QrCamera({
+  onReady,
   onScan,
   onError,
 }: {
+  onReady: () => void
   onScan: (data: string) => void
   onError: (message: string) => void
 }) {
   const video = useRef<HTMLVideoElement>(null)
+  const handleReady = useEffectEvent(onReady)
   const handleScan = useEffectEvent(onScan)
   const handleError = useEffectEvent(onError)
 
@@ -68,6 +71,7 @@ export function QrCamera({
           },
         })
         await scanner.start()
+        if (!disposed && !accepted) handleReady()
       } catch {
         if (!disposed) handleError('Could not start the camera. Check camera permissions or use a text code.')
       }

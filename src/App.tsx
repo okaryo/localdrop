@@ -6,8 +6,10 @@ import type { ReceiveUpdate } from './fileTransfer'
 import { createLocalCode, maxCodeLength, readDescription } from './webrtc'
 
 type Role = 'receiver' | 'sender'
+type ScanStage = 'starting' | 'scanning'
 type Lane = 'sent' | 'received'
 type Message = { id: number; lane: Lane; text: string }
+type ConnectionFailure = { status: string; message: string }
 type Session = {
   peer: RTCPeerConnection
   controller: AbortController
@@ -15,10 +17,12 @@ type Session = {
   fileReceiver: FileReceiver | null
   sessionId?: string
   connectionTimer?: number
+  answerApplied?: boolean
+  iceConnected?: boolean
+  channelOpened?: boolean
 }
 
 const messageLimit = 500
-const connectionError = 'Could not connect. Check that both devices are on the same Wi-Fi and can reach each other.'
 
 export function App() {
   const [role, setRole] = useState<Role | null>(null)
@@ -55,7 +59,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const session = useRef<Session | null>(null)
   const nextMessageId = useRef(0)
   const [busy, setBusy] = useState(false)
-  const [scanning, setScanning] = useState(false)
+  const [scanStage, setScanStage] = useState<ScanStage | null>(null)
   const [remoteCode, setRemoteCode] = useState('')
   const [localCode, setLocalCode] = useState('')
   const [answerApplied, setAnswerApplied] = useState(false)
@@ -71,6 +75,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const [sendingFile, setSendingFile] = useState(false)
   const [fileStatus, setFileStatus] = useState('')
   const [fileError, setFileError] = useState('')
+  const remoteLabel = isReceiver ? 'answer' : 'offer'
+  const displayedStatus = scanStage === 'starting'
+    ? 'Starting camera…'
+    : scanStage === 'scanning' ? `Looking for the ${remoteLabel} QR code…` : status
 
   useEffect(() => () => {
     if (session.current) closeSession(session.current)
@@ -81,14 +89,38 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     setMessages((previous) => [...previous.slice(-49), entry])
   }
 
-  function end(active: Session, failure?: string) {
+  function end(active: Session, failure?: ConnectionFailure) {
+    if (active.controller.signal.aborted) return
     closeSession(active)
     const interrupted = active.fileReceiver?.interrupt()
     if (interrupted) setFileUpdate(interrupted)
+    setScanStage(null)
     setConnected(false)
     setEnded(true)
-    setStatus(failure ? 'Connection failed' : 'Disconnected')
-    if (failure) setError(failure)
+    setStatus(failure?.status ?? 'Disconnected')
+    setError(failure?.message ?? '')
+  }
+
+  function failConnection(active: Session, timedOut = false) {
+    const iceState = active.peer.iceConnectionState
+    if (active.channelOpened) {
+      end(active, {
+        status: 'WebRTC connection lost',
+        message: 'Start over on both devices to reconnect.',
+      })
+    } else if (active.iceConnected || iceState === 'connected' || iceState === 'completed') {
+      end(active, {
+        status: 'Data channel did not open',
+        message: 'WebRTC found a network path, but the data channel never opened. Start over on both devices.',
+      })
+    } else {
+      end(active, {
+        status: timedOut ? 'WebRTC connection timed out' : 'WebRTC connection failed',
+        message: (active.answerApplied ? 'The answer was applied. ' : '')
+          + `No direct connection was established (ICE state: ${iceState}). `
+          + 'Check that both devices can reach each other on the same Wi-Fi, then start over.',
+      })
+    }
   }
 
   function watchChannel(active: Session, channel: RTCDataChannel) {
@@ -97,6 +129,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     const { signal } = active.controller
 
     function onOpen() {
+      active.channelOpened = true
       window.clearTimeout(active.connectionTimer)
       setError('')
       setOpened(true)
@@ -113,7 +146,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         if (update) setFileUpdate(update)
       }
     }, { signal })
-    channel.addEventListener('close', () => end(active), { signal })
+    channel.addEventListener('close', () => {
+      if (active.channelOpened) end(active)
+      else failConnection(active)
+    }, { signal })
     if (channel.readyState === 'open') onOpen()
   }
 
@@ -129,10 +165,16 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     session.current = active
     const { signal } = active.controller
 
+    peer.addEventListener('iceconnectionstatechange', () => {
+      if (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') {
+        active.iceConnected = true
+        if (!active.channelOpened) setStatus('Opening data channel…')
+      }
+    }, { signal })
     peer.addEventListener('connectionstatechange', () => {
       if (peer.connectionState === 'failed') {
-        end(active, connectionError)
-      } else if (peer.connectionState === 'disconnected') {
+        failConnection(active)
+      } else if (peer.connectionState === 'disconnected' && active.channelOpened) {
         setConnected(false)
         setStatus('Connection interrupted')
       } else if (peer.connectionState === 'connected' && active.channel?.readyState === 'open') {
@@ -157,14 +199,16 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   }
 
   async function exchange(code: string, source: 'text' | 'qr') {
-    if (busy || opened || ended || (source === 'text' && scanning)) return
-    setScanning(false)
+    if (busy || opened || ended || (source === 'text' && scanStage)) return
+    setScanStage(null)
     setError('')
     setBusy(true)
 
     let active = session.current
+    let failureStatus = `Invalid ${remoteLabel} ${source === 'qr' ? 'QR code' : 'text code'}`
     try {
       if (isReceiver && !localCode) {
+        failureStatus = 'Could not create the offer'
         setStatus('Creating offer…')
         const sessionId = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) =>
           byte.toString(16).padStart(2, '0'),
@@ -184,26 +228,33 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         if (description.sessionId && description.sessionId !== active.sessionId) {
           throw new Error('This answer is for a different offer. Scan or paste the answer for this session.')
         }
+        failureStatus = 'Could not apply the answer'
+        setStatus('Applying answer…')
         try {
           await active.peer.setRemoteDescription(description)
         } catch {
-          throw new Error('Could not apply the answer. Check that it was created from this offer.')
+          throw new Error('Check that the answer was created from the offer shown on this page.')
         }
         if (active.controller.signal.aborted) return
+        active.answerApplied = true
         setAnswerApplied(true)
         if (active.channel?.readyState !== 'open') {
-          setStatus('Connecting…')
+          setStatus(active.iceConnected ? 'Opening data channel…' : 'Checking WebRTC connection…')
           const pending = active
-          pending.connectionTimer = window.setTimeout(() => end(pending, connectionError), 20_000)
+          pending.connectionTimer = window.setTimeout(() => failConnection(pending, true), 20_000)
         }
       } else if (!isReceiver) {
-        setStatus('Creating answer…')
+        failureStatus = 'Could not apply the offer'
+        setStatus('Applying offer…')
         active = startSession(description.sessionId)
         try {
           await active.peer.setRemoteDescription(description)
         } catch {
-          throw new Error('Could not apply the offer. Ask the Mac to create a new offer.')
+          throw new Error('Ask the receiving device to create a new offer.')
         }
+        if (active.controller.signal.aborted) return
+        failureStatus = 'Could not create the answer'
+        setStatus('Creating answer…')
         setLocalCode(await createLocalCode(
           active.peer, 'answer', active.controller.signal, description.sessionId,
         ))
@@ -216,7 +267,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         closeSession(session.current)
         session.current = null
       }
-      setStatus(isReceiver && localCode ? 'Waiting for the answer' : '')
+      setStatus(failureStatus)
       setError(cause instanceof Error ? cause.message : 'Could not set up the connection.')
     } finally {
       setBusy(false)
@@ -266,7 +317,6 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const showLocalCode = Boolean(localCode) && !answerApplied
   const canScan = window.isSecureContext && Boolean(navigator.mediaDevices?.getUserMedia)
   const localLabel = isReceiver ? 'Offer' : 'Answer'
-  const remoteLabel = isReceiver ? 'answer' : 'offer'
 
   return (
     <section className="card" aria-labelledby="connection-heading">
@@ -276,7 +326,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
           {connected ? 'Disconnect' : 'Start over'}
         </button>
       </div>
-      <div role="status">{status && <p className="status">{status}</p>}</div>
+      <div role="status">{displayedStatus && <p className="status">{displayedStatus}</p>}</div>
       {error && <p className="error" role="alert">{error}</p>}
 
       {showExchange && (
@@ -286,31 +336,34 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
               Create offer
             </button>
           )}
-          {!scanning && showLocalCode && session.current?.sessionId && (
+          {!scanStage && showLocalCode && session.current?.sessionId && (
             <div className="pairing">
               <p>Scan this {localLabel.toLowerCase()} with LocalDrop on the other device.</p>
               <PairingQr code={localCode} label={localLabel} />
             </div>
           )}
           {showRemoteInput && (
-            scanning ? (
+            scanStage ? (
               <div className="pairing">
-                <p>Point the camera at the {remoteLabel} QR code.</p>
+                <p>Keep the entire QR code inside the camera guide.</p>
                 <QrCamera
+                  onReady={() => setScanStage('scanning')}
                   onScan={(data) => void exchange(data, 'qr')}
                   onError={(message) => {
-                    setScanning(false)
+                    setScanStage(null)
+                    setStatus(`Could not scan the ${remoteLabel} QR code`)
                     setError(message)
                   }}
                 />
-                <button className="secondary" type="button" onClick={() => setScanning(false)}>
+                <button className="secondary" type="button" onClick={() => setScanStage(null)}>
                   Cancel scan
                 </button>
               </div>
             ) : canScan ? (
               <button type="button" disabled={busy} onClick={() => {
                 setError('')
-                setScanning(true)
+                setStatus(isReceiver ? 'Waiting for the answer' : '')
+                setScanStage('starting')
               }}>
                 Scan {remoteLabel} QR code
               </button>
@@ -318,7 +371,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
               <p>QR scanning requires camera access on an HTTPS page. You can use a text code here.</p>
             )
           )}
-          {!scanning && (showLocalCode || showRemoteInput) && (
+          {!scanStage && (showLocalCode || showRemoteInput) && (
             <details open={showRemoteInput && !canScan ? true : undefined}>
               <summary>Use a text code</summary>
               <form className="manual-code" onSubmit={(event) => {
