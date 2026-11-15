@@ -10,6 +10,7 @@ import type { ReceiveUpdate } from './fileTransfer'
 import { AppError, errorMessage } from './i18n'
 import type { Message as UiMessage } from './i18n'
 import { readQrCode } from './qr'
+import { useScreenWakeLock } from './useScreenWakeLock'
 import { createLocalCode, maxCodeLength, readDescription } from './webrtc'
 
 type Role = 'receiver' | 'sender'
@@ -162,6 +163,8 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const displayedStatus: UiMessage | null = scanStage === 'starting'
     ? 'cameraStarting'
     : scanStage === 'scanning' ? (isReceiver ? 'lookingForAnswer' : 'lookingForOffer') : status
+
+  useScreenWakeLock(connected && (sendingFile || fileUpdate?.status === 'receiving'))
 
   useEffect(() => () => {
     const active = session.current
