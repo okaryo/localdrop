@@ -17,7 +17,7 @@ import { createLocalCode, maxCodeLength, readDescription } from './webrtc'
 
 type Role = 'receiver' | 'sender'
 type ScanStage = 'starting' | 'scanning'
-type ConnectionFailure = { status: UiMessage; message: UiMessage }
+type ConnectionFailure = { status: UiMessage; message: UiMessage; trigger: FailureTrigger }
 type CompletedFile = Extract<ReceiveUpdate, { status: 'ready' }>
 type ActiveFileUpdate = Exclude<ReceiveUpdate, CompletedFile>
 type Session = {
@@ -187,31 +187,37 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
   function end(active: Session, failure?: ConnectionFailure) {
     if (active.controller.signal.aborted) return
-    showFileUpdate(closeSession(active))
+    const report = failure && connectionDiagnostics(active.trace, active.peer, active.channel, role, failure.trigger)
+    showFileUpdate(closeSession(active, report))
     setScanStage(null)
     setConnected(false)
     setEnded(true)
     setStatus(failure?.status ?? 'disconnected')
     setError(failure?.message ?? null)
+    void report?.then((text) => {
+      if (session.current === active) setDiagnostics(text)
+    })
   }
 
   function failConnection(active: Session, trigger: FailureTrigger) {
     if (active.controller.signal.aborted) return
-    setDiagnostics(connectionDiagnostics(active.trace, active.channel, role, trigger))
     const iceState = active.peer.iceConnectionState
     if (active.channelOpened) {
       end(active, {
         status: 'connectionLost',
         message: 'reconnect',
+        trigger,
       })
     } else if (active.iceConnected || iceState === 'connected' || iceState === 'completed') {
       end(active, {
         status: 'channelNotOpen',
         message: 'channelNotOpenHelp',
+        trigger,
       })
     } else {
       end(active, {
         status: trigger === 'connection timeout' ? 'connectionTimedOut' : 'connectionFailed',
+        trigger,
         message: {
           key: active.trace.answerAppliedAt === undefined ? 'noConnection' : 'noConnectionAfterAnswer',
           values: { state: iceState },
@@ -378,7 +384,9 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       if (active?.controller.signal.aborted) return
 
       if (active && operation) {
-        setDiagnostics(connectionDiagnostics(active.trace, active.channel, role, operation))
+        const report = await connectionDiagnostics(active.trace, active.peer, active.channel, role, operation)
+        if (active.controller.signal.aborted) return
+        setDiagnostics(report)
       }
       if (!localCode && session.current) {
         closeSession(session.current)
@@ -723,11 +731,17 @@ function CopyableText({ text, label, copyLabel, selectLabel, rows }: {
   )
 }
 
-function closeSession(active: Session) {
+function closeSession(active: Session, afterDiagnostics?: Promise<string>) {
   const interrupted = active.fileReceiver?.interrupt() ?? null
   active.controller.abort()
   window.clearTimeout(active.connectionTimer)
-  active.channel?.close()
-  active.peer.close()
+  function close() {
+    active.channel?.close()
+    active.peer.close()
+  }
+
+  // Let getStats finish before releasing the peer so failure data is still available.
+  if (afterDiagnostics) void afterDiagnostics.then(close)
+  else close()
   return interrupted
 }

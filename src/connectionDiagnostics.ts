@@ -64,12 +64,13 @@ function record(history: StateEntry[], state: string, elapsedMs: number) {
   history.push({ state, elapsedMs })
 }
 
-export function connectionDiagnostics(
+export async function connectionDiagnostics(
   trace: ConnectionTrace,
+  peer: RTCPeerConnection,
   channel: RTCDataChannel | null,
   role: 'receiver' | 'sender',
   trigger: FailureTrigger,
-): string {
+): Promise<string> {
   const now = performance.now()
   trace.capture(now)
   const elapsed = trace.answerAppliedAt === undefined
@@ -77,7 +78,7 @@ export function connectionDiagnostics(
     : `${Math.round(now - trace.answerAppliedAt)} ms`
   const format = (history: StateEntry[]) => history.map(({ state, elapsedMs }) => `${state} (+${elapsedMs} ms)`).join(' → ')
 
-  return [
+  const lines = [
     'LocalDrop connection diagnostics',
     `Role: ${role}`,
     `Failure event: ${trigger}`,
@@ -86,5 +87,73 @@ export function connectionDiagnostics(
     `DTLS state: ${format(trace.dtls) || 'not available'}`,
     `Connection state: ${format(trace.connection)}`,
     `Data channel state: ${channel?.readyState ?? 'not created'}`,
+  ]
+  return [...lines, await readIceStats(peer)].join('\n')
+}
+
+async function readIceStats(peer: RTCPeerConnection): Promise<string> {
+  let timer: number | undefined
+  try {
+    const report = await Promise.race([
+      peer.getStats(),
+      new Promise<null>((resolve) => { timer = window.setTimeout(() => resolve(null), 250) }),
+    ])
+    return report ? formatIceStats(report) : 'ICE statistics: not available (timed out)'
+  } catch {
+    return 'ICE statistics: not available'
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
+type IceStatsEntry = RTCStats & {
+  state?: string
+  requestsSent?: number
+  responsesReceived?: number
+  selectedCandidatePairId?: string
+}
+
+function formatIceStats(report: RTCStatsReport): string {
+  const states = new Map([
+    ['frozen', 0], ['waiting', 0], ['in-progress', 0], ['succeeded', 0], ['failed', 0], ['unknown', 0],
+  ])
+  let pairs = 0
+  let requests = 0
+  let responses = 0
+  let requestCounters = 0
+  let responseCounters = 0
+  let transportReported = false
+  let pairSelected = false
+
+  report.forEach((entry: IceStatsEntry) => {
+    if (entry.type === 'transport') {
+      transportReported = true
+      pairSelected ||= Boolean(entry.selectedCandidatePairId)
+    } else if (entry.type === 'candidate-pair') {
+      pairs++
+      const state = entry.state && states.has(entry.state) ? entry.state : 'unknown'
+      states.set(state, (states.get(state) ?? 0) + 1)
+      if (typeof entry.requestsSent === 'number') {
+        requests += entry.requestsSent
+        requestCounters++
+      }
+      if (typeof entry.responsesReceived === 'number') {
+        responses += entry.responsesReceived
+        responseCounters++
+      }
+    }
+  })
+
+  const breakdown = Array.from(states, ([state, count]) => count ? `${state}: ${count}` : '').filter(Boolean)
+  const counter = (total: number, reported: number) => {
+    if (!reported) return 'not available'
+    return reported === pairs ? String(total) : `${total} (${reported}/${pairs} pairs reported)`
+  }
+
+  return [
+    `ICE candidate pairs: ${pairs}${breakdown.length ? ` (${breakdown.join(', ')})` : ''}`,
+    `ICE checks sent: ${counter(requests, requestCounters)}`,
+    `ICE check responses received: ${counter(responses, responseCounters)}`,
+    `ICE selected pair: ${transportReported ? (pairSelected ? 'yes' : 'no') : 'not available'}`,
   ].join('\n')
 }
