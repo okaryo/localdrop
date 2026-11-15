@@ -400,6 +400,25 @@ summary {
   accent-color: var(--primary);
 }
 
+.file-send-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.file-send-spinner {
+  flex: none;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(1turn); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-send-spinner { animation: none; }
+}
+
 .file-list {
   display: grid;
   gap: 0.375rem;

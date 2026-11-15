@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ExternalLink, Languages, QrCode, Wifi } from 'lucide-react'
+import { ArrowDown, ArrowUp, ExternalLink, Languages, LoaderCircle, QrCode, Wifi } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { FileDownload } from './FileDownload'
@@ -559,7 +559,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
               <button type="submit" disabled={
                 !connected || !selectedFiles.length || Boolean(oversizedFile) || sendingFile
               }>{t(selectedFiles.length > 1 ? 'sendFiles' : 'sendFile')}</button>
-              <p role="status">{fileStatus && t(fileStatus)}</p>
+              <p className="file-send-status" role="status">
+                {sendingFile && <LoaderCircle className="file-send-spinner" size={18} aria-hidden="true" />}
+                {fileStatus && <span>{t(fileStatus)}</span>}
+              </p>
               {displayedFileError && <p className="error" role="alert">{t(displayedFileError)}</p>}
             </form>
           )}
