@@ -95,6 +95,7 @@ header {
 
 h1,
 h2,
+h3,
 p {
   margin: 0;
 }
@@ -116,10 +117,6 @@ h1 {
 
 .home-shell header {
   margin-bottom: 1.75rem;
-}
-
-.status {
-  color: var(--muted);
 }
 
 .card {
@@ -215,6 +212,51 @@ h1 {
 
 .card-heading {
   justify-content: space-between;
+}
+
+.connection-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.75rem;
+}
+
+.connection-status {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+.connection-status p {
+  margin-top: 0.5rem;
+}
+
+.is-connected .connection-status {
+  grid-column: 1;
+}
+
+.is-connected > button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.connected-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 1rem;
+  background: #eaf7ef;
+  color: #205d40;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.connected-badge::before {
+  content: '';
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 h2 {
@@ -390,9 +432,11 @@ summary {
 .file-transfer {
   display: grid;
   gap: 0.75rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--line);
   overflow-wrap: anywhere;
+}
+
+.file-transfer h3 {
+  font-size: 1rem;
 }
 
 .file-progress progress {

@@ -417,10 +417,11 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const canScan = window.isSecureContext && Boolean(navigator.mediaDevices?.getUserMedia)
   const localLabel = isReceiver ? 'Offer' : 'Answer'
   const canDisconnect = opened && !ended
+  const showConnected = displayedStatus === 'connected'
 
   return (
     <section className="card" aria-labelledby="connection-heading">
-      <div className="card-heading">
+      <div className={showConnected ? 'connection-heading is-connected' : 'connection-heading'}>
         <h2 id="connection-heading">{t(isReceiver ? 'receiveWifi' : 'sendWifi')}</h2>
         <button className="secondary" type="button" onClick={() => {
           if (canDisconnect && session.current) end(session.current)
@@ -428,8 +429,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         }}>
           {t(canDisconnect ? 'disconnect' : 'startOver')}
         </button>
+        <div className="connection-status" role="status">
+          {displayedStatus && <p className={showConnected ? 'connected-badge' : undefined}>{t(displayedStatus)}</p>}
+        </div>
       </div>
-      <div role="status">{displayedStatus && <p className="status">{t(displayedStatus)}</p>}</div>
       {error && <p className="error" role="alert">{t(error)}</p>}
 
       {showExchange && (
@@ -535,7 +538,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
             />
           ) : (
             <form className="file-transfer" onSubmit={transferFiles} aria-labelledby="file-heading">
-              <h2 id="file-heading">{t('sendFiles')}</h2>
+              <h3 id="file-heading">{t('sendFiles')}</h3>
               <label>
                 {t('files')}
                 <input
@@ -594,7 +597,7 @@ function ReceivedFiles({ update, completed, onChooseDestination, onDecline }: {
   const { language, t } = useLanguage()
   return (
     <section className="file-transfer" aria-labelledby="file-heading">
-      <h2 id="file-heading">{t('receiveFiles')}</h2>
+      <h3 id="file-heading">{t('receiveFiles')}</h3>
       {!update && !completed.length && <p>{t('waitingForFiles')}</p>}
       {update?.status === 'interrupted' && <p className="error" role="alert">{t(update.message)}</p>}
       {update?.status === 'offered' && (
