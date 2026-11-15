@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowUp, ExternalLink, Languages, LoaderCircle, QrCode, Wifi } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { connectionDiagnostics, createConnectionTrace, recordConnectionStates } from './connectionDiagnostics'
+import { connectionDiagnostics, createConnectionTrace } from './connectionDiagnostics'
 import type { ConnectionTrace, FailureTrigger } from './connectionDiagnostics'
 import { FileDownload } from './FileDownload'
 import { useLanguage } from './LanguageProvider'
@@ -197,7 +197,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
   function failConnection(active: Session, trigger: FailureTrigger) {
     if (active.controller.signal.aborted) return
-    setDiagnostics(connectionDiagnostics(active.trace, active.peer, active.channel, role, trigger))
+    setDiagnostics(connectionDiagnostics(active.trace, active.channel, role, trigger))
     const iceState = active.peer.iceConnectionState
     if (active.channelOpened) {
       end(active, {
@@ -257,26 +257,25 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
   function startSession(sessionId?: string) {
     const peer = new RTCPeerConnection({ iceServers: [] })
+    const controller = new AbortController()
+    const { signal } = controller
     const active: Session = {
       peer,
-      controller: new AbortController(),
+      controller,
       channel: null,
       sessionId,
       fileReceiver: null,
-      trace: createConnectionTrace(peer),
+      trace: createConnectionTrace(peer, signal),
     }
     session.current = active
-    const { signal } = active.controller
 
     peer.addEventListener('iceconnectionstatechange', () => {
-      recordConnectionStates(active.trace, peer)
       if (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') {
         active.iceConnected = true
         if (!active.channelOpened) setStatus('openingChannel')
       }
     }, { signal })
     peer.addEventListener('connectionstatechange', () => {
-      recordConnectionStates(active.trace, peer)
       if (peer.connectionState === 'failed') {
         failConnection(active, 'connectionstatechange: failed')
       } else if (peer.connectionState === 'disconnected' && active.channelOpened) {
@@ -348,6 +347,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         }
         if (active.controller.signal.aborted) return
         active.trace.answerAppliedAt = performance.now()
+        active.trace.capture(active.trace.answerAppliedAt)
         setAnswerApplied(true)
         if (active.channel?.readyState !== 'open') {
           setStatus(active.iceConnected ? 'openingChannel' : 'checkingConnection')
@@ -365,6 +365,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
           throw new AppError('offerApplyHelp')
         }
         if (active.controller.signal.aborted) return
+        active.trace.capture()
         failureStatus = 'answerFailed'
         operation = 'create answer or gather ICE candidates'
         setStatus('creatingAnswer')
@@ -377,7 +378,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       if (active?.controller.signal.aborted) return
 
       if (active && operation) {
-        setDiagnostics(connectionDiagnostics(active.trace, active.peer, active.channel, role, operation))
+        setDiagnostics(connectionDiagnostics(active.trace, active.channel, role, operation))
       }
       if (!localCode && session.current) {
         closeSession(session.current)
@@ -463,7 +464,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
             label="connectionDiagnosticsText"
             copyLabel="copyConnectionDiagnostics"
             selectLabel="selectConnectionDiagnostics"
-            rows={7}
+            rows={8}
           />
         </details>
       )}
