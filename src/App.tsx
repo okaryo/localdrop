@@ -140,6 +140,7 @@ function LanguagePicker() {
 function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const { t } = useLanguage()
   const isReceiver = role === 'receiver'
+  const debugIce = new URLSearchParams(window.location.search).get('debug') === 'ice'
   const session = useRef<Session | null>(null)
   const [busy, setBusy] = useState(false)
   const [scanStage, setScanStage] = useState<ScanStage | null>(null)
@@ -188,7 +189,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   function end(active: Session, failure?: ConnectionFailure) {
     if (active.controller.signal.aborted) return
     const report = failure && connectionDiagnostics(active.trace, active.peer, active.channel, role, failure.trigger)
-    showFileUpdate(closeSession(active, report))
+    showFileUpdate(closeSession(active, report, debugIce && Boolean(failure)))
     setScanStage(null)
     setConnected(false)
     setEnded(true)
@@ -271,9 +272,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       channel: null,
       sessionId,
       fileReceiver: null,
-      trace: createConnectionTrace(peer, signal),
+      trace: createConnectionTrace(peer, signal, debugIce),
     }
     session.current = active
+    active.trace.debug?.camera('peer created')
 
     peer.addEventListener('iceconnectionstatechange', () => {
       if (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') {
@@ -316,6 +318,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     setBusy(true)
 
     let active = session.current
+    if (source === 'qr') active?.trace.debug?.camera('pairing QR read')
     let operation: FailureTrigger | undefined
     let failureStatus: UiMessage = source === 'qr'
       ? (isReceiver ? 'invalidAnswerQr' : 'invalidOfferQr')
@@ -330,6 +333,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         ).join('')
         active = startSession(sessionId)
         setLocalCode(await createLocalCode(active.peer, 'offer', active.controller.signal, sessionId))
+        active.trace.debug?.description('local Offer ready', active.peer.localDescription?.sdp)
         setStatus('waitingForAnswer')
         return
       }
@@ -345,6 +349,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         }
         failureStatus = 'answerApplyFailed'
         operation = 'setRemoteDescription: answer rejected'
+        active.trace.debug?.description('remote Answer read', description.sdp)
         setStatus('applyingAnswer')
         try {
           await active.peer.setRemoteDescription(description)
@@ -365,6 +370,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         operation = 'setRemoteDescription: offer rejected'
         setStatus('applyingOffer')
         active = startSession(description.sessionId)
+        active.trace.debug?.description('remote Offer read', description.sdp)
         try {
           await active.peer.setRemoteDescription(description)
         } catch {
@@ -378,6 +384,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         setLocalCode(await createLocalCode(
           active.peer, 'answer', active.controller.signal, description.sessionId,
         ))
+        active.trace.debug?.description('local Answer ready', active.peer.localDescription?.sdp)
         setStatus('waitingForReceiver')
       }
     } catch (cause) {
@@ -464,6 +471,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         </div>
       </div>
       {error && <p className="error" role="alert">{t(error)}</p>}
+      {debugIce && ended && error && <p>{t('iceDebugPeerRetained')}</p>}
       {diagnostics && (
         <details>
           <summary>{t('connectionDiagnostics')}</summary>
@@ -508,7 +516,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
                 <p>{t(isReceiver ? 'fitAnswer' : 'fitOffer')}</p>
                 <QrCamera
                   decode={readQrCode}
-                  onReady={() => setScanStage('scanning')}
+                  onReady={() => {
+                    session.current?.trace.debug?.camera('QR camera ready')
+                    setScanStage('scanning')
+                  }}
                   onScan={(data) => void exchange(data, 'qr')}
                   onError={(message) => {
                     setScanStage(null)
@@ -524,6 +535,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
               <div className="pairing">
                 {isReceiver && <p>{t('scanAnswerHere')}</p>}
                 <button type="button" disabled={busy} onClick={() => {
+                  session.current?.trace.debug?.camera('QR scan requested')
                   setError(null)
                   setStatus(isReceiver ? 'waitingForAnswer' : null)
                   setScanStage('starting')
@@ -731,13 +743,13 @@ function CopyableText({ text, label, copyLabel, selectLabel, rows }: {
   )
 }
 
-function closeSession(active: Session, afterDiagnostics?: Promise<string>) {
+function closeSession(active: Session, afterDiagnostics?: Promise<string>, keepPeer = false) {
   const interrupted = active.fileReceiver?.interrupt() ?? null
   active.controller.abort()
   window.clearTimeout(active.connectionTimer)
   function close() {
     active.channel?.close()
-    active.peer.close()
+    if (!keepPeer) active.peer.close()
   }
 
   // Let getStats finish before releasing the peer so failure data is still available.

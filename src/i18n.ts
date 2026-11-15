@@ -31,6 +31,7 @@ const translations = {
   connectionDiagnosticsText: ['Diagnostic log', '診断ログ'],
   copyConnectionDiagnostics: ['Copy diagnostics', '診断情報をコピー'],
   selectConnectionDiagnostics: ['Select diagnostics', '診断情報を選択'],
+  iceDebugPeerRetained: ['Debug mode: check chrome://webrtc-internals before choosing Start over.', 'デバッグモードでは接続の記録を残します。「最初からやり直す」の前に chrome://webrtc-internals を確認してください。'],
   noConnection: ['No direct connection was established (ICE state: {state}). Check that both devices can reach each other on the same Wi-Fi, then start over.', '直接接続を確立できませんでした（ICEの状態: {state}）。同じWi-Fi上で端末同士が通信できることを確認し、最初からやり直してください。'],
   noConnectionAfterAnswer: ['The answer was applied. No direct connection was established (ICE state: {state}). Check that both devices can reach each other on the same Wi-Fi, then start over.', '応答は適用されましたが、直接接続を確立できませんでした（ICEの状態: {state}）。同じWi-Fi上で端末同士が通信できることを確認し、最初からやり直してください。'],
   openingChannel: ['Opening data channel…', 'データチャネルを開いています…'],

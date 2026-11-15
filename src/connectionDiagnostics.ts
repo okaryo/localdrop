@@ -1,4 +1,5 @@
 type StateEntry = { state: string; elapsedMs: number }
+type DebugEntry = { label: string; elapsedMs: number; details: Promise<string> }
 
 export type ConnectionTrace = {
   startedAt: number
@@ -7,6 +8,11 @@ export type ConnectionTrace = {
   dtls: StateEntry[]
   connection: StateEntry[]
   capture: (now?: number) => void
+  debug?: {
+    entries: DebugEntry[]
+    camera: (label: string) => void
+    description: (label: string, sdp?: string) => void
+  }
 }
 
 export type FailureTrigger =
@@ -19,15 +25,44 @@ export type FailureTrigger =
   | 'setRemoteDescription: answer rejected'
 
 const maxEntries = 32
+const periodicIceCheck = 'periodic ICE check'
 
-export function createConnectionTrace(peer: RTCPeerConnection, signal: AbortSignal): ConnectionTrace {
+export function createConnectionTrace(peer: RTCPeerConnection, signal: AbortSignal, debug = false): ConnectionTrace {
   let dtlsTransport: RTCDtlsTransport | undefined
+  let observedIceTransport: RTCIceTransport | undefined
   const trace: ConnectionTrace = {
     startedAt: performance.now(),
     ice: [],
     dtls: [],
     connection: [],
     capture,
+  }
+
+  function addDebugEntry(label: string, details: Promise<string>) {
+    if (!trace.debug || signal.aborted) return
+    const { entries } = trace.debug
+    if (entries.length >= maxEntries) {
+      const periodic = entries.findIndex((entry) => entry.label === periodicIceCheck)
+      if (periodic === -1 && label === periodicIceCheck) return
+      entries.splice(Math.max(periodic, 0), 1)
+    }
+    entries.push({ label, details, elapsedMs: Math.round(performance.now() - trace.startedAt) })
+  }
+
+  function sample(label: string) {
+    if (trace.debug && !signal.aborted) addDebugEntry(label, readIceStats(peer, true))
+  }
+
+  if (debug) {
+    trace.debug = {
+      entries: [],
+      camera: (label) => addDebugEntry(label, readCameraPermission()),
+      description: (label, sdp) => addDebugEntry(label, Promise.resolve(describeHostCandidates(sdp))),
+    }
+    const timer = window.setInterval(() => {
+      if (peer.iceConnectionState !== 'new' && peer.sctp?.state !== 'connected') sample(periodicIceCheck)
+    }, 1000)
+    signal.addEventListener('abort', () => window.clearInterval(timer), { once: true })
   }
 
   function capture(now = performance.now()) {
@@ -45,10 +80,22 @@ export function createConnectionTrace(peer: RTCPeerConnection, signal: AbortSign
     if (dtlsTransport || trace.dtls.length) {
       record(trace.dtls, dtlsTransport?.state ?? 'not available', elapsedMs)
     }
+    const iceTransport = trace.debug ? dtlsTransport?.iceTransport : undefined
+    if (iceTransport !== observedIceTransport) {
+      observedIceTransport?.removeEventListener('selectedcandidatepairchange', onSelectedPairChange)
+      observedIceTransport = iceTransport
+      observedIceTransport?.addEventListener('selectedcandidatepairchange', onSelectedPairChange, { signal })
+    }
   }
 
-  function onStateChange() {
+  function onStateChange(event: Event) {
     capture()
+    if (event.type === 'iceconnectionstatechange') sample(`ICE: ${peer.iceConnectionState}`)
+    if (event.type === 'statechange') sample(`DTLS: ${dtlsTransport?.state ?? 'not available'}`)
+  }
+
+  function onSelectedPairChange() {
+    sample('selected ICE pair changed')
   }
 
   capture(trace.startedAt)
@@ -88,21 +135,44 @@ export async function connectionDiagnostics(
     `Connection state: ${format(trace.connection)}`,
     `Data channel state: ${channel?.readyState ?? 'not created'}`,
   ]
-  return [...lines, await readIceStats(peer)].join('\n')
+  const finalStats = readIceStats(peer, Boolean(trace.debug))
+  const timeline = trace.debug?.entries.slice()
+  if (timeline) {
+    lines.push('Debug timeline (relative to session start)')
+    lines.push(...await Promise.all(timeline.map(async ({ label, elapsedMs, details }) =>
+      `+${elapsedMs} ms ${label}\n${await details}`)))
+    lines.push('ICE statistics at failure')
+  }
+  return [...lines, await finalStats].join('\n')
 }
 
-async function readIceStats(peer: RTCPeerConnection): Promise<string> {
+async function withinStatsDeadline<T>(request: () => Promise<T>): Promise<T | null> {
   let timer: number | undefined
   try {
-    const report = await Promise.race([
-      peer.getStats(),
+    return await Promise.race([
+      request(),
       new Promise<null>((resolve) => { timer = window.setTimeout(() => resolve(null), 250) }),
     ])
-    return report ? formatIceStats(report) : 'ICE statistics: not available (timed out)'
-  } catch {
-    return 'ICE statistics: not available'
   } finally {
     window.clearTimeout(timer)
+  }
+}
+
+async function readIceStats(peer: RTCPeerConnection, debug: boolean): Promise<string> {
+  try {
+    const report = await withinStatsDeadline(() => peer.getStats())
+    return report ? formatIceStats(report, debug) : 'ICE statistics: not available (timed out)'
+  } catch {
+    return 'ICE statistics: not available'
+  }
+}
+
+async function readCameraPermission(): Promise<string> {
+  try {
+    const permission = await withinStatsDeadline(() => navigator.permissions.query({ name: 'camera' }))
+    return `Camera permission: ${permission?.state ?? 'not available'}`
+  } catch {
+    return 'Camera permission: not available'
   }
 }
 
@@ -111,9 +181,14 @@ type IceStatsEntry = RTCStats & {
   requestsSent?: number
   responsesReceived?: number
   selectedCandidatePairId?: string
+  localCandidateId?: string
+  remoteCandidateId?: string
+  candidateType?: string
+  protocol?: string
+  address?: string | null
 }
 
-function formatIceStats(report: RTCStatsReport): string {
+function formatIceStats(report: RTCStatsReport, debug: boolean): string {
   const states = new Map([
     ['frozen', 0], ['waiting', 0], ['in-progress', 0], ['succeeded', 0], ['failed', 0], ['unknown', 0],
   ])
@@ -123,12 +198,12 @@ function formatIceStats(report: RTCStatsReport): string {
   let requestCounters = 0
   let responseCounters = 0
   let transportReported = false
-  let pairSelected = false
+  let selectedPairId: string | undefined
 
   report.forEach((entry: IceStatsEntry) => {
     if (entry.type === 'transport') {
       transportReported = true
-      pairSelected ||= Boolean(entry.selectedCandidatePairId)
+      selectedPairId ||= entry.selectedCandidatePairId
     } else if (entry.type === 'candidate-pair') {
       pairs++
       const state = entry.state && states.has(entry.state) ? entry.state : 'unknown'
@@ -150,10 +225,47 @@ function formatIceStats(report: RTCStatsReport): string {
     return reported === pairs ? String(total) : `${total} (${reported}/${pairs} pairs reported)`
   }
 
-  return [
+  const lines = [
     `ICE candidate pairs: ${pairs}${breakdown.length ? ` (${breakdown.join(', ')})` : ''}`,
     `ICE checks sent: ${counter(requests, requestCounters)}`,
     `ICE check responses received: ${counter(responses, responseCounters)}`,
-    `ICE selected pair: ${transportReported ? (pairSelected ? 'yes' : 'no') : 'not available'}`,
-  ].join('\n')
+    `ICE selected pair: ${transportReported ? (selectedPairId ? 'yes' : 'no') : 'not available'}`,
+  ]
+  if (debug && selectedPairId) {
+    const pair: IceStatsEntry | undefined = report.get(selectedPairId)
+    lines.push(`Selected ICE route: ${describeCandidate(report, pair?.localCandidateId)} → ${describeCandidate(report, pair?.remoteCandidateId)}`)
+    lines.push(`Selected pair checks sent/answered: ${pair?.requestsSent ?? 'not available'}/${pair?.responsesReceived ?? 'not available'}`)
+  }
+  return lines.join('\n')
+}
+
+function describeCandidate(report: RTCStatsReport, id?: string): string {
+  const candidate: IceStatsEntry | undefined = id === undefined ? undefined : report.get(id)
+  const type = candidate?.candidateType ?? ''
+  const protocol = candidate?.protocol ?? ''
+  return [
+    ['host', 'srflx', 'prflx', 'relay'].includes(type) ? type : 'unknown candidate type',
+    ['udp', 'tcp'].includes(protocol) ? protocol : 'unknown protocol',
+    addressType(candidate?.address ?? ''),
+  ].join(', ')
+}
+
+function describeHostCandidates(sdp?: string): string {
+  if (!sdp) return 'Host candidates: not available'
+  const counts = new Map<string, number>()
+  for (const line of sdp.split('\n')) {
+    if (!line.startsWith('a=candidate:')) continue
+    const fields = line.trim().split(/\s+/)
+    if (fields[6] !== 'typ' || fields[7] !== 'host') continue
+    const type = addressType(fields[4] ?? '')
+    counts.set(type, (counts.get(type) ?? 0) + 1)
+  }
+  return `Host candidates: ${Array.from(counts, ([type, count]) => `${type}: ${count}`).join(', ') || '0'}`
+}
+
+function addressType(address: string): string {
+  if (/\.local\.?$/i.test(address)) return 'mDNS'
+  if (address.includes(':')) return 'IPv6'
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(address)) return 'IPv4'
+  return 'unknown address type'
 }
