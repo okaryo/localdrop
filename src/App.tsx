@@ -1,3 +1,4 @@
+import { ArrowDown, ArrowUp, ExternalLink, Languages, QrCode, Wifi } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { FileDownload } from './FileDownload'
@@ -34,59 +35,105 @@ const messageLimit = 500
 const fileLimitMiB = maxFileSize / (1024 * 1024)
 
 export function App() {
-  const { language, setLanguage, t } = useLanguage()
+  const { t } = useLanguage()
   const [role, setRole] = useState<Role | null>(null)
   const [qrFiles, setQrFiles] = useState(false)
   const supported = typeof RTCPeerConnection === 'function'
+  const isHome = !role && !qrFiles
 
   return (
-    <main className={role ? 'shell wifi-shell' : 'shell'}>
+    <main className={isHome ? 'shell home-shell' : 'shell transfer-shell'}>
       <header>
         <div className="app-heading">
-          <h1>LocalDrop</h1>
-          <select
-            className="language-select"
-            aria-label={t('language')}
-            value={language}
-            onChange={(event) => setLanguage(event.currentTarget.value === 'ja' ? 'ja' : 'en')}
+          <a
+            className="brand"
+            href={import.meta.env.BASE_URL}
+            aria-label={t('homeLink')}
+            onClick={(event) => {
+              if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+              event.preventDefault()
+              setRole(null)
+              setQrFiles(false)
+              window.scrollTo(0, 0)
+            }}
           >
-            <option value="en" lang="en">English</option>
-            <option value="ja" lang="ja">日本語</option>
-          </select>
+            <img src={`${import.meta.env.BASE_URL}icon.png`} width={44} height={44} alt="" />
+            <h1>LocalDrop</h1>
+          </a>
+          <LanguagePicker />
         </div>
-        <p>{t('tagline')}</p>
+        {isHome && <p className="tagline">{t('tagline')}</p>}
       </header>
       {qrFiles ? (
         <QrFiles onBack={() => setQrFiles(false)} />
       ) : role ? (
         <Connection role={role} onReset={() => setRole(null)} />
       ) : (
-        <>
-          <section className="card" aria-labelledby="device-heading">
+        <div className="mode-grid">
+          <section className="card mode-card wifi-mode" aria-labelledby="device-heading">
+            <div className="mode-icon"><Wifi size={25} aria-hidden="true" /></div>
             <h2 id="device-heading">{t('wifiTransfer')}</h2>
             {supported ? (
               <>
-                <p>{t('wifiStart')}</p>
-                <div className="actions">
-                  <button onClick={() => setRole('receiver')}>{t('receive')}</button>
-                  <button className="secondary" onClick={() => setRole('sender')}>{t('send')}</button>
+                <p className="mode-description">{t('wifiModeDescription')}</p>
+                <p className="mode-note">{t('wifiStart')}</p>
+                <div className="actions mode-actions">
+                  <button onClick={() => setRole('receiver')}>
+                    <ArrowDown size={17} aria-hidden="true" />
+                    {t('receive')}
+                  </button>
+                  <button className="secondary" onClick={() => setRole('sender')}>
+                    <ArrowUp size={17} aria-hidden="true" />
+                    {t('send')}
+                  </button>
                 </div>
               </>
             ) : (
               <p role="alert">{t('unsupportedWebrtc')}</p>
             )}
           </section>
-          <section className="card" aria-labelledby="qr-heading">
+          <section className="card mode-card qr-mode" aria-labelledby="qr-heading">
+            <div className="mode-icon"><QrCode size={25} aria-hidden="true" /></div>
             <h2 id="qr-heading">{t('transferByQr')}</h2>
-            <p>{t('qrIntro')}</p>
-            <button className="secondary" onClick={() => setQrFiles(true)}>{t('qrFileTransfer')}</button>
+            <p className="mode-description">{t('qrIntro')}</p>
+            <div className="actions mode-actions">
+              <button className="secondary" onClick={() => setQrFiles(true)}>{t('qrFileTransfer')}</button>
+            </div>
           </section>
-        </>
+        </div>
       )}
-      <footer className="trademark">
-        {t('trademark')}
+      <footer className="app-footer">
+        <p>{t('trademark')}</p>
+        <a href="https://github.com/okaryo/localdrop" target="_blank" rel="noreferrer">
+          {t('repository')}
+          <ExternalLink size={15} aria-hidden="true" />
+        </a>
       </footer>
     </main>
+  )
+}
+
+function LanguagePicker() {
+  const { language, setLanguage, t } = useLanguage()
+  const [pointerFocus, setPointerFocus] = useState(false)
+
+  return (
+    <div className="language-control">
+      <Languages size={17} aria-hidden="true" />
+      <select
+        className="language-select"
+        aria-label={t('language')}
+        data-pointer-focus={pointerFocus || undefined}
+        value={language}
+        onPointerDown={() => setPointerFocus(true)}
+        onKeyDown={() => setPointerFocus(false)}
+        onBlur={() => setPointerFocus(false)}
+        onChange={(event) => setLanguage(event.currentTarget.value === 'ja' ? 'ja' : 'en')}
+      >
+        <option value="en" lang="en">English</option>
+        <option value="ja" lang="ja">日本語</option>
+      </select>
+    </div>
   )
 }
 

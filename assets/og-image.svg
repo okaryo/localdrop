@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#0a1e40"/>
+      <stop offset="1" stop-color="#123f78"/>
+    </linearGradient>
+    <radialGradient id="halo">
+      <stop stop-color="#60aaff" stop-opacity=".23"/>
+      <stop offset="1" stop-color="#60aaff" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.5" fill="#b4d6ff" opacity=".18"/>
+    </pattern>
+    <filter id="shadow" x="-.3" y="-.3" width="1.7" height="1.8">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#03142e" flood-opacity=".48"/>
+    </filter>
+  </defs>
+  <path fill="url(#background)" d="M0 0h1200v630H0z"/>
+  <ellipse cx="938" cy="300" rx="470" ry="396" fill="url(#halo)"/>
+  <path fill="url(#grid)" opacity=".55" d="M644 56h490v516H644z"/>
+  <image x="77" y="87" width="80" height="80" href="../public/icon.png"/>
+  <g font-family="Inter, system-ui, sans-serif">
+    <text x="73" y="269" fill="#f9fbff" font-size="103" font-weight="800" letter-spacing="-3">LocalDrop</text>
+    <text x="77" y="339" fill="#c6e0ff" font-size="39" font-weight="500" letter-spacing="-.6">
+      <tspan x="77">Send files between</tspan>
+      <tspan x="77" dy="50">nearby devices.</tspan>
+    </text>
+    <rect x="77" y="450" width="130" height="52" rx="26" fill="#b3d8ff" fill-opacity=".12" stroke="#86b9fa" stroke-opacity=".6"/>
+    <rect x="221" y="450" width="170" height="52" rx="26" fill="#b3d8ff" fill-opacity=".12" stroke="#86b9fa" stroke-opacity=".6"/>
+    <text x="142" y="483" text-anchor="middle" fill="#e7f2ff" font-size="22" font-weight="650">Wi-Fi</text>
+    <text x="306" y="483" text-anchor="middle" fill="#e7f2ff" font-size="22" font-weight="650">Offline QR</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="652" y="195" width="367" height="243" rx="19" fill="#183966" stroke="#8fbcf2" stroke-width="3"/>
+    <rect x="667" y="210" width="337" height="213" rx="10" fill="#edf5ff"/>
+    <path d="M623 438h425l-11 14a22 22 0 0 1-17 8H651a22 22 0 0 1-17-8z" fill="#719dd1"/>
+    <path d="M802 438h68l-6 7h-56z" fill="#2a5484"/>
+    <rect x="718" y="253" width="140" height="113" rx="13" fill="#d4e7ff"/>
+    <path d="M774 334v-42a4 4 0 0 1 4-4h18l13 13v33a4 4 0 0 1-4 4h-27a4 4 0 0 1-4-4z" fill="#f9fbff" stroke="#1765bc" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M796 288v11a2 2 0 0 0 2 2h11m-26 15h16m-16 8h16" fill="none" stroke="#1765bc" stroke-width="3" stroke-linecap="round"/>
+    <rect x="944" y="155" width="169" height="337" rx="31" fill="#143665" stroke="#a6ccff" stroke-width="3"/>
+    <rect x="955" y="166" width="147" height="315" rx="23" fill="#e2efff"/>
+    <path d="M1003 171h51v7a8 8 0 0 1-8 8h-35a8 8 0 0 1-8-8z" fill="#143665"/>
+    <image x="978" y="266" width="101" height="101" href="../public/icon.png"/>
+    <path d="M1007 461h42" stroke="#89aee0" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <path d="M875 312h56m-8-8 8 8-8 8" fill="none" stroke="#2f78cf" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3 7"/>
+</svg>
