@@ -35,14 +35,16 @@ that choice in the browser.
 
 1. Open an HTTPS build in Chrome on both devices. Connect them to the same Wi-Fi.
 2. Choose **Receive** on the receiving device and select **Create offer**.
+   Allow camera access if prompted. LocalDrop creates the offer after access is granted.
 3. Choose **Send** on the sending device, select **Scan offer QR code**, and
    point the camera at the offer. The answer QR code appears after scanning.
 4. On the receiving device, select **Scan answer QR code** and scan the answer.
 5. When both pages show **Connected**, follow the file transfer steps below.
 
 Use **Use a text code** if your browser cannot access the camera or read the QR
-code. It lets you copy and paste the offer and answer manually, including on
-local HTTP. Share connection codes privately.
+code. The receiver can choose **Create offer text code** to start without
+camera access. Copy and paste the offer and answer between devices, including
+on local HTTP. Share connection codes privately.
 
 If pairing stops, check the status shown in the app:
 

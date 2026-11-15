@@ -142,10 +142,12 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const isReceiver = role === 'receiver'
   const debugIce = new URLSearchParams(window.location.search).get('debug') === 'ice'
   const session = useRef<Session | null>(null)
+  const cameraRequest = useRef<AbortController | null>(null)
   const [busy, setBusy] = useState(false)
   const [scanStage, setScanStage] = useState<ScanStage | null>(null)
   const [remoteCode, setRemoteCode] = useState('')
   const [localCode, setLocalCode] = useState('')
+  const [textOffer, setTextOffer] = useState(false)
   const [answerApplied, setAnswerApplied] = useState(false)
   const [status, setStatus] = useState<UiMessage | null>(null)
   const [error, setError] = useState<UiMessage | null>(null)
@@ -171,6 +173,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   useScreenWakeLock(connected && (sendingFile || fileUpdate?.status === 'receiving'))
 
   useEffect(() => () => {
+    cameraRequest.current?.abort()
     const active = session.current
     session.current = null
     if (active) closeSession(active)
@@ -325,6 +328,22 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       : (isReceiver ? 'invalidAnswerText' : 'invalidOfferText')
     try {
       if (isReceiver && !localCode) {
+        if (source === 'qr') {
+          failureStatus = 'pairingCameraFailed'
+          setStatus('requestPairingCamera')
+          const request = new AbortController()
+          cameraRequest.current = request
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+            stream.getTracks().forEach((track) => track.stop())
+          } catch {
+            if (request.signal.aborted) return
+            throw new AppError('pairingCameraHelp')
+          } finally {
+            cameraRequest.current = null
+          }
+          if (request.signal.aborted) return
+        }
         operation = 'create offer or gather ICE candidates'
         failureStatus = 'offerFailed'
         setStatus('creatingOffer')
@@ -332,7 +351,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
           byte.toString(16).padStart(2, '0'),
         ).join('')
         active = startSession(sessionId)
-        setLocalCode(await createLocalCode(active.peer, 'offer', active.controller.signal, sessionId))
+        const offer = await createLocalCode(active.peer, 'offer', active.controller.signal, sessionId)
+        if (active.controller.signal.aborted) return
+        setTextOffer(source === 'text')
+        setLocalCode(offer)
         active.trace.debug?.description('local Offer ready', active.peer.localDescription?.sdp)
         setStatus('waitingForAnswer')
         return
@@ -452,6 +474,8 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const showExchange = !opened && !ended
   const showLocalCode = Boolean(localCode) && !answerApplied
   const canScan = window.isSecureContext && Boolean(navigator.mediaDevices?.getUserMedia)
+  const needsOffer = isReceiver && !localCode
+  const showQrPairing = canScan && !textOffer
   const localLabel = isReceiver ? 'Offer' : 'Answer'
   const canDisconnect = opened && !ended
   const showConnected = displayedStatus === 'connected'
@@ -487,15 +511,15 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
       {showExchange && (
         <>
-          {isReceiver && !localCode && (
+          {needsOffer && canScan && (
             <div className="pairing">
               <p>{t('createPairingCode')}</p>
-              <button type="button" disabled={busy} onClick={() => void exchange('', 'text')}>
+              <button type="button" disabled={busy} onClick={() => void exchange('', 'qr')}>
                 {t('createOffer')}
               </button>
             </div>
           )}
-          {!scanStage && showLocalCode && session.current?.sessionId && (
+          {!scanStage && showLocalCode && !textOffer && session.current?.sessionId && (
             <div className="pairing">
               <PairingHint device={isReceiver ? 'sending' : 'receiving'}>
                 {isReceiver
@@ -531,7 +555,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
                   {t('cancelScan')}
                 </button>
               </div>
-            ) : canScan ? (
+            ) : showQrPairing ? (
               <div className="pairing">
                 {isReceiver && <p>{t('scanAnswerHere')}</p>}
                 <button type="button" disabled={busy} onClick={() => {
@@ -543,39 +567,48 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
                   {t(isReceiver ? 'scanAnswer' : 'scanOffer')}
                 </button>
               </div>
-            ) : (
+            ) : !canScan && (
               <p>{t('useTextCodeInsecure')}</p>
             )
           )}
-          {!scanStage && (showLocalCode || showRemoteInput) && (
-            <details open={showRemoteInput && !canScan ? true : undefined}>
+          {!scanStage && (needsOffer || showLocalCode || showRemoteInput) && (
+            <details open={textOffer || !canScan ? true : undefined}>
               <summary>{t('useTextCode')}</summary>
-              <form className="manual-code" onSubmit={(event) => {
-                event.preventDefault()
-                void exchange(remoteCode, 'text')
-              }}>
-                {showLocalCode && <LocalCode code={localCode} label={localLabel} />}
-                {showRemoteInput && (
-                  <>
-                    <label>
-                      {t(isReceiver ? 'answerFromSender' : 'offerFromReceiver')}
-                      <textarea
-                        rows={4}
-                        maxLength={maxCodeLength + 1}
-                        value={remoteCode}
-                        onChange={(event) => setRemoteCode(event.target.value)}
-                        disabled={busy}
-                        spellCheck={false}
-                        autoCapitalize="off"
-                        autoCorrect="off"
-                      />
-                    </label>
-                    <button type="submit" disabled={busy || !remoteCode.trim()}>
-                      {t(isReceiver ? 'applyAnswer' : 'createAnswer')}
-                    </button>
-                  </>
-                )}
-              </form>
+              {needsOffer ? (
+                <div className="pairing">
+                  {!canScan && <p>{t('useTextCodeInsecure')}</p>}
+                  <button className="secondary" type="button" disabled={busy} onClick={() => void exchange('', 'text')}>
+                    {t('createTextOffer')}
+                  </button>
+                </div>
+              ) : (
+                <form className="manual-code" onSubmit={(event) => {
+                  event.preventDefault()
+                  void exchange(remoteCode, 'text')
+                }}>
+                  {showLocalCode && <LocalCode code={localCode} label={localLabel} />}
+                  {showRemoteInput && (
+                    <>
+                      <label>
+                        {t(isReceiver ? 'answerFromSender' : 'offerFromReceiver')}
+                        <textarea
+                          rows={4}
+                          maxLength={maxCodeLength + 1}
+                          value={remoteCode}
+                          onChange={(event) => setRemoteCode(event.target.value)}
+                          disabled={busy}
+                          spellCheck={false}
+                          autoCapitalize="off"
+                          autoCorrect="off"
+                        />
+                      </label>
+                      <button type="submit" disabled={busy || !remoteCode.trim()}>
+                        {t(isReceiver ? 'applyAnswer' : 'createAnswer')}
+                      </button>
+                    </>
+                  )}
+                </form>
+              )}
             </details>
           )}
         </>
