@@ -38,7 +38,7 @@ that choice in the browser.
 3. Choose **Send** on the sending device, select **Scan offer QR code**, and
    point the camera at the offer. The answer QR code appears after scanning.
 4. On the receiving device, select **Scan answer QR code** and scan the answer.
-5. When both pages show **Connected**, send a short message in each direction.
+5. When both pages show **Connected**, follow the file transfer steps below.
 
 Use **Use a text code** if your browser cannot access the camera or read the QR
 code. It lets you copy and paste the offer and answer manually, including on
@@ -54,7 +54,7 @@ If pairing stops, check the status shown in the app:
   connection was established. Check Wi-Fi client isolation, firewall settings,
   and VPN settings.
 - **Data channel did not open** means WebRTC found a network path but could not
-  open the channel for messages and files.
+  open the channel for file transfer.
 
 Use **Start over** on both devices to create a fresh pair of codes.
 

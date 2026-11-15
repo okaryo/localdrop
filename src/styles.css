@@ -301,38 +301,6 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
-.messages {
-  display: grid;
-  gap: 0.5rem;
-  max-height: 18rem;
-  overflow: auto;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.messages li {
-  display: grid;
-  gap: 0.125rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.5rem;
-  background: #eff5ff;
-}
-
-.messages strong {
-  font-size: 0.875rem;
-}
-
-.messages span {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.message-form {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-}
-
 .pairing {
   display: grid;
   gap: 0.75rem;

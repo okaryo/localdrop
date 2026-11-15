@@ -14,8 +14,6 @@ import { createLocalCode, maxCodeLength, readDescription } from './webrtc'
 
 type Role = 'receiver' | 'sender'
 type ScanStage = 'starting' | 'scanning'
-type Lane = 'sent' | 'received'
-type Message = { id: number; lane: Lane; text: string }
 type ConnectionFailure = { status: UiMessage; message: UiMessage }
 type CompletedFile = Extract<ReceiveUpdate, { status: 'ready' }>
 type ActiveFileUpdate = Exclude<ReceiveUpdate, CompletedFile>
@@ -31,7 +29,6 @@ type Session = {
   channelOpened?: boolean
 }
 
-const messageLimit = 500
 const fileLimitMiB = maxFileSize / (1024 * 1024)
 
 export function App() {
@@ -141,7 +138,6 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const { t } = useLanguage()
   const isReceiver = role === 'receiver'
   const session = useRef<Session | null>(null)
-  const nextMessageId = useRef(0)
   const [busy, setBusy] = useState(false)
   const [scanStage, setScanStage] = useState<ScanStage | null>(null)
   const [remoteCode, setRemoteCode] = useState('')
@@ -152,8 +148,6 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const [ended, setEnded] = useState(false)
   const [opened, setOpened] = useState(false)
   const [connected, setConnected] = useState(false)
-  const [message, setMessage] = useState('')
-  const [messages, setMessages] = useState<Message[]>([])
   const [fileUpdate, setFileUpdate] = useState<ActiveFileUpdate | null>(null)
   const [completedFiles, setCompletedFiles] = useState<CompletedFile[]>([])
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
@@ -171,11 +165,6 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   useEffect(() => () => {
     if (session.current) closeSession(session.current)
   }, [])
-
-  function addMessage(lane: Lane, text: string) {
-    const entry = { id: nextMessageId.current++, lane, text }
-    setMessages((previous) => [...previous.slice(-49), entry])
-  }
 
   function showFileUpdate(update: ReceiveUpdate | null) {
     if (!update) return
@@ -234,10 +223,8 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
     channel.addEventListener('open', onOpen, { signal })
     channel.addEventListener('message', (event) => {
-      if (typeof event.data === 'string' && event.data.length <= messageLimit) {
-        addMessage('received', event.data)
-      } else if (event.data instanceof ArrayBuffer) {
-        if (active.fileReceiver) showFileUpdate(active.fileReceiver.accept(event.data))
+      if (active.fileReceiver && event.data instanceof ArrayBuffer) {
+        showFileUpdate(active.fileReceiver.accept(event.data))
       }
     }, { signal })
     channel.addEventListener('close', () => {
@@ -367,22 +354,6 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       setError(errorMessage(cause, 'setupFailed'))
     } finally {
       setBusy(false)
-    }
-  }
-
-  function send(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const channel = session.current?.channel
-    const text = message.trim()
-    if (!connected || channel?.readyState !== 'open' || !text || text.length > messageLimit) return
-
-    try {
-      channel.send(text)
-      addMessage('sent', text)
-      setMessage('')
-      setError(null)
-    } catch {
-      setError('messageFailed')
     }
   }
 
@@ -531,28 +502,6 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
       {opened && (
         <>
-          {messages.length > 0 && (
-            <ul className="messages" aria-label={t('messages')} aria-live="polite">
-              {messages.map((entry) => (
-                <li key={entry.id}>
-                  <strong>{t(entry.lane === 'sent' ? 'you' : 'otherDevice')}</strong>
-                  <span>{entry.text}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <form className="message-form" onSubmit={send}>
-            <label>
-              {t('message')}
-              <input
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                maxLength={messageLimit}
-                disabled={!connected}
-              />
-            </label>
-            <button type="submit" disabled={!connected || !message.trim()}>{t('send')}</button>
-          </form>
           {isReceiver ? (
             <ReceivedFiles update={fileUpdate} completed={completedFiles} />
           ) : (

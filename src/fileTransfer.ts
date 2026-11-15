@@ -7,7 +7,6 @@ const maxMetadataSize = 4096
 const bufferLimit = 512 * 1024
 const lowBuffer = 128 * 1024
 
-// Binary frames carry files. Plain strings on the same channel are chat messages.
 const frameType = { start: 1, chunk: 2, finish: 3, abort: 4 } as const
 
 type FileMetadata = { name: string; size: number }
