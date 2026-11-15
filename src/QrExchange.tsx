@@ -1,6 +1,11 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type QrScanner from 'qr-scanner'
-import { makeQrImage, readQrCode } from './qr'
+import { makeQrImage } from './qr'
+
+export async function prepareQrCamera(): Promise<void> {
+  // Load the fallback decoder even when the browser has a native detector.
+  await Promise.all([import('qr-scanner'), import('qr-scanner/qr-scanner-worker.min.js')])
+}
 
 export function PairingQr({ code, label }: { code: string; label: 'Offer' | 'Answer' }) {
   const [image, setImage] = useState('')
@@ -22,10 +27,14 @@ export function PairingQr({ code, label }: { code: string; label: 'Offer' | 'Ans
 }
 
 export function QrCamera({
+  continuous = false,
+  decode,
   onReady,
   onScan,
   onError,
 }: {
+  continuous?: boolean
+  decode?: (data: string) => Promise<string>
   onReady: () => void
   onScan: (data: string) => void
   onError: (message: string) => void
@@ -38,6 +47,7 @@ export function QrCamera({
   useEffect(() => {
     let disposed = false
     let accepted = false
+    let lastCode: string | undefined
     let scanner: QrScanner | undefined
 
     async function start() {
@@ -45,9 +55,14 @@ export function QrCamera({
         const { default: Scanner } = await import('qr-scanner')
         if (disposed || !video.current) return
         scanner = new Scanner(video.current, ({ data }) => {
-          if (disposed || accepted) return
-          accepted = true
-          void readQrCode(data).then(
+          if (disposed || accepted || data === lastCode) return
+          accepted = !continuous
+          lastCode = data
+          if (!decode) {
+            handleScan(data)
+            return
+          }
+          void decode(data).then(
             (code) => { if (!disposed) handleScan(code) },
             (error: Error) => { if (!disposed) handleError(error.message) },
           )
@@ -73,7 +88,7 @@ export function QrCamera({
         await scanner.start()
         if (!disposed && !accepted) handleReady()
       } catch {
-        if (!disposed) handleError('Could not start the camera. Check camera permissions or use a text code.')
+        if (!disposed) handleError('Could not start the camera. Check camera permissions and try again.')
       }
     }
 
@@ -82,7 +97,7 @@ export function QrCamera({
       disposed = true
       scanner?.destroy()
     }
-  }, [])
+  }, [continuous, decode])
 
   return (
     <div className="camera-preview">

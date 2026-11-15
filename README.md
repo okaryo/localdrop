@@ -1,8 +1,8 @@
 # LocalDrop
 
 LocalDrop is a browser app in development for sharing files between nearby
-devices. The prototype uses QR codes to pair devices and sends files or short
-text messages over WebRTC.
+devices. The prototype sends files or short messages over WebRTC. It can also
+transfer files of up to 4 KiB directly through QR codes.
 
 Try the [public prototype](https://okaryo.github.io/localdrop/).
 

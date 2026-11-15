@@ -13,6 +13,20 @@ Connect both devices to the same Wi-Fi and open the **Network** URL printed by
 Vite in Chrome on both devices. If the page does not load, check that the
 computer running Vite allows incoming connections to the dev server.
 
+## Test QR file transfer offline
+
+1. Open LocalDrop in Chrome on both devices. Use an HTTPS build or, for two
+   tabs on one computer, the localhost URL printed by `pnpm preview` after
+   `pnpm build`.
+2. Choose **QR file transfer** on both pages. Wait until both say **Ready for
+   offline transfer**, then turn off Wi-Fi and mobile data on the devices or
+   set both tabs to **Offline** in Chrome DevTools. Keep the pages open.
+3. Choose **Send by QR** on one device and select a file of up to 4 KiB. On the
+   receiving device, choose **Receive by QR** and then **Scan file QR codes**.
+4. Show each QR code to the camera. Advance with **Next code** after each scan.
+   The receiver lists any missing codes, which can be scanned in any order.
+5. When every code has been read and the file verified, select **Download**.
+
 ## Test the current prototype
 
 1. Open an HTTPS build in Chrome on both devices. Connect them to the same Wi-Fi.

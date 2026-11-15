@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { FileDownload } from './FileDownload'
 import { PairingQr, QrCamera } from './QrExchange'
+import { QrFiles } from './QrFiles'
 import { FileReceiver, maxFileSize, sendFile } from './fileTransfer'
 import type { ReceiveUpdate } from './fileTransfer'
+import { readQrCode } from './qr'
 import { createLocalCode, maxCodeLength, readDescription } from './webrtc'
 
 type Role = 'receiver' | 'sender'
@@ -26,26 +29,38 @@ const messageLimit = 500
 
 export function App() {
   const [role, setRole] = useState<Role | null>(null)
+  const [qrFiles, setQrFiles] = useState(false)
   const supported = typeof RTCPeerConnection === 'function'
 
   return (
     <main className="shell">
       <header>
         <h1>LocalDrop</h1>
-        <p>Send a short message between devices on the same Wi-Fi.</p>
+        <p>Send files and messages between nearby devices.</p>
       </header>
-      {!supported ? (
-        <p role="alert">This browser does not support WebRTC. Open LocalDrop in Chrome.</p>
+      {qrFiles ? (
+        <QrFiles onBack={() => setQrFiles(false)} />
       ) : role ? (
         <Connection role={role} onReset={() => setRole(null)} />
       ) : (
-        <section className="card" aria-labelledby="device-heading">
-          <h2 id="device-heading">Which device is this?</h2>
-          <div className="actions">
-            <button onClick={() => setRole('receiver')}>Receive on Mac</button>
-            <button className="secondary" onClick={() => setRole('sender')}>Send from Android</button>
-          </div>
-        </section>
+        <>
+          <section className="card" aria-labelledby="device-heading">
+            <h2 id="device-heading">Transfer over Wi-Fi</h2>
+            {supported ? (
+              <div className="actions">
+                <button onClick={() => setRole('receiver')}>Receive on Mac</button>
+                <button className="secondary" onClick={() => setRole('sender')}>Send from Android</button>
+              </div>
+            ) : (
+              <p role="alert">This browser does not support WebRTC. Open LocalDrop in Chrome to use Wi-Fi transfer.</p>
+            )}
+          </section>
+          <section className="card" aria-labelledby="qr-heading">
+            <h2 id="qr-heading">Transfer by QR code</h2>
+            <p>Send a file up to 4 KiB without a network connection.</p>
+            <button className="secondary" onClick={() => setQrFiles(true)}>QR file transfer</button>
+          </section>
+        </>
       )}
       <footer className="trademark">
         QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.
@@ -347,6 +362,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
               <div className="pairing">
                 <p>Keep the entire QR code inside the camera guide.</p>
                 <QrCamera
+                  decode={readQrCode}
                   onReady={() => setScanStage('scanning')}
                   onScan={(data) => void exchange(data, 'qr')}
                   onError={(message) => {
@@ -481,19 +497,6 @@ function ReceivedFile({ update }: { update: ReceiveUpdate | null }) {
       <progress aria-label="File receive progress" value={update.received} max={update.size || 1} />
     </div>
   )
-}
-
-function FileDownload({ name, blob }: { name: string; blob: Blob }) {
-  const [download, setDownload] = useState<{ blob: Blob; url: string } | null>(null)
-
-  useEffect(() => {
-    const url = URL.createObjectURL(blob)
-    setDownload({ blob, url })
-    return () => URL.revokeObjectURL(url)
-  }, [blob])
-
-  if (download?.blob !== blob) return null
-  return <a href={download.url} download={name}>Download {name}</a>
 }
 
 function LocalCode({ code, label }: { code: string; label: 'Offer' | 'Answer' }) {

@@ -213,6 +213,10 @@ summary {
   font-size: 0.875rem;
 }
 
+.card + .card {
+  margin-top: 1rem;
+}
+
 .file-transfer {
   display: grid;
   gap: 0.75rem;
