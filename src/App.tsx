@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FormEvent, ReactNode } from 'react'
 import { FileDownload } from './FileDownload'
 import { PairingQr, QrCamera } from './QrExchange'
 import { QrFiles } from './QrFiles'
@@ -33,7 +33,7 @@ export function App() {
   const supported = typeof RTCPeerConnection === 'function'
 
   return (
-    <main className="shell">
+    <main className={role ? 'shell wifi-shell' : 'shell'}>
       <header>
         <h1>LocalDrop</h1>
         <p>Send files and messages between nearby devices.</p>
@@ -47,10 +47,13 @@ export function App() {
           <section className="card" aria-labelledby="device-heading">
             <h2 id="device-heading">Transfer over Wi-Fi</h2>
             {supported ? (
-              <div className="actions">
-                <button onClick={() => setRole('receiver')}>Receive on Mac</button>
-                <button className="secondary" onClick={() => setRole('sender')}>Send from Android</button>
-              </div>
+              <>
+                <p>Connect both devices to the same Wi-Fi. Start on the device receiving the file.</p>
+                <div className="actions">
+                  <button onClick={() => setRole('receiver')}>Receive</button>
+                  <button className="secondary" onClick={() => setRole('sender')}>Send</button>
+                </div>
+              </>
             ) : (
               <p role="alert">This browser does not support WebRTC. Open LocalDrop in Chrome to use Wi-Fi transfer.</p>
             )}
@@ -273,7 +276,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         setLocalCode(await createLocalCode(
           active.peer, 'answer', active.controller.signal, description.sessionId,
         ))
-        setStatus('Waiting for the Mac to apply the answer')
+        setStatus('Waiting for the receiving device to connect')
       }
     } catch (cause) {
       if (active?.controller.signal.aborted) return
@@ -336,7 +339,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   return (
     <section className="card" aria-labelledby="connection-heading">
       <div className="card-heading">
-        <h2 id="connection-heading">{isReceiver ? 'Receive on Mac' : 'Send from Android'}</h2>
+        <h2 id="connection-heading">{isReceiver ? 'Receive over Wi-Fi' : 'Send over Wi-Fi'}</h2>
         <button className="secondary" type="button" onClick={onReset}>
           {connected ? 'Disconnect' : 'Start over'}
         </button>
@@ -347,20 +350,38 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       {showExchange && (
         <>
           {isReceiver && !localCode && (
-            <button type="button" disabled={busy} onClick={() => void exchange('', 'text')}>
-              Create offer
-            </button>
+            <div className="pairing">
+              <p>Create a pairing code to show to the sending device.</p>
+              <button type="button" disabled={busy} onClick={() => void exchange('', 'text')}>
+                Create offer
+              </button>
+            </div>
           )}
           {!scanStage && showLocalCode && session.current?.sessionId && (
             <div className="pairing">
-              <p>Scan this {localLabel.toLowerCase()} with LocalDrop on the other device.</p>
+              <PairingHint device={isReceiver ? 'sending' : 'receiving'}>
+                {isReceiver ? (
+                  <>Choose <strong>Send</strong>, then <strong>Scan offer QR code</strong>. Scan the code below.</>
+                ) : (
+                  <>Choose <strong>Scan answer QR code</strong> on the Receive screen. Scan the code below.</>
+                )}
+              </PairingHint>
               <PairingQr code={localCode} label={localLabel} />
             </div>
+          )}
+          {showRemoteInput && !isReceiver && canScan && (
+            <PairingHint device="receiving">
+              Choose <strong>Receive</strong>, then <strong>Create offer</strong> to show the code.
+            </PairingHint>
           )}
           {showRemoteInput && (
             scanStage ? (
               <div className="pairing">
-                <p>Keep the entire QR code inside the camera guide.</p>
+                <p>
+                  {isReceiver
+                    ? 'Fit the answer QR code from the sending device inside the camera guide.'
+                    : 'Fit the offer QR code from the receiving device inside the camera guide.'}
+                </p>
                 <QrCamera
                   decode={readQrCode}
                   onReady={() => setScanStage('scanning')}
@@ -376,13 +397,16 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
                 </button>
               </div>
             ) : canScan ? (
-              <button type="button" disabled={busy} onClick={() => {
-                setError('')
-                setStatus(isReceiver ? 'Waiting for the answer' : '')
-                setScanStage('starting')
-              }}>
-                Scan {remoteLabel} QR code
-              </button>
+              <div className="pairing">
+                {isReceiver && <p>When the sending device shows its answer, scan it here.</p>}
+                <button type="button" disabled={busy} onClick={() => {
+                  setError('')
+                  setStatus(isReceiver ? 'Waiting for the answer' : '')
+                  setScanStage('starting')
+                }}>
+                  Scan {remoteLabel} QR code
+                </button>
+              </div>
             ) : (
               <p>QR scanning requires camera access on an HTTPS page. You can use a text code here.</p>
             )
@@ -398,7 +422,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
                 {showRemoteInput && (
                   <>
                     <label>
-                      {isReceiver ? 'Answer from Android' : 'Offer from Mac'}
+                      {isReceiver ? 'Answer from the sending device' : 'Offer from the receiving device'}
                       <textarea
                         rows={4}
                         maxLength={maxCodeLength + 1}
@@ -478,6 +502,15 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         </>
       )}
     </section>
+  )
+}
+
+function PairingHint({ device, children }: { device: 'sending' | 'receiving'; children: ReactNode }) {
+  return (
+    <div className="pairing-hint">
+      <p className="pairing-hint-label">On the {device} device</p>
+      <p>{children}</p>
+    </div>
   )
 }
 

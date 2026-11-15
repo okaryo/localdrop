@@ -30,9 +30,9 @@ computer running Vite allows incoming connections to the dev server.
 ## Test the current prototype
 
 1. Open an HTTPS build in Chrome on both devices. Connect them to the same Wi-Fi.
-2. Choose the receive option on one device and select **Create offer**.
-3. Choose the send option on the other device, select **Scan offer QR code**,
-   and point the camera at the offer. The answer QR code appears after scanning.
+2. Choose **Receive** on the receiving device and select **Create offer**.
+3. Choose **Send** on the sending device, select **Scan offer QR code**, and
+   point the camera at the offer. The answer QR code appears after scanning.
 4. On the receiving device, select **Scan answer QR code** and scan the answer.
 5. When both pages show **Connected**, send a short message in each direction.
 
