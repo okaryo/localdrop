@@ -28,6 +28,17 @@ local HTTP. Share connection codes privately. Use **Start over** on both devices
 to create a fresh pair of codes. If the pages load but the peer connection
 fails, check Wi-Fi client isolation, firewall settings, and VPN settings.
 
+## Test file transfer
+
+After connecting, choose a file of up to 25 MiB on the sending device and
+select **Send file**. Watch the progress on the receiving device. When the
+transfer finishes, select **Download** and compare the saved file with the
+original.
+
+To test an interruption, disconnect the sending device during a transfer.
+The receiving device should report an interruption and offer no download
+for the unfinished file. Connect again to retry the transfer.
+
 ## Build
 
 ```sh

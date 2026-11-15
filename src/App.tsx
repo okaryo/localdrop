@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { PairingQr, QrCamera } from './QrExchange'
+import { FileReceiver, maxFileSize, sendFile } from './fileTransfer'
+import type { ReceiveUpdate } from './fileTransfer'
 import { createLocalCode, maxCodeLength, readDescription } from './webrtc'
 
 type Role = 'receiver' | 'sender'
@@ -10,6 +12,7 @@ type Session = {
   peer: RTCPeerConnection
   controller: AbortController
   channel: RTCDataChannel | null
+  fileReceiver: FileReceiver | null
   sessionId?: string
   connectionTimer?: number
 }
@@ -63,6 +66,11 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const [connected, setConnected] = useState(false)
   const [message, setMessage] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
+  const [fileUpdate, setFileUpdate] = useState<ReceiveUpdate | null>(null)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [sendingFile, setSendingFile] = useState(false)
+  const [fileStatus, setFileStatus] = useState('')
+  const [fileError, setFileError] = useState('')
 
   useEffect(() => () => {
     if (session.current) closeSession(session.current)
@@ -75,6 +83,8 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
   function end(active: Session, failure?: string) {
     closeSession(active)
+    const interrupted = active.fileReceiver?.interrupt()
+    if (interrupted) setFileUpdate(interrupted)
     setConnected(false)
     setEnded(true)
     setStatus(failure ? 'Connection failed' : 'Disconnected')
@@ -83,6 +93,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
   function watchChannel(active: Session, channel: RTCDataChannel) {
     active.channel = channel
+    channel.binaryType = 'arraybuffer'
     const { signal } = active.controller
 
     function onOpen() {
@@ -97,6 +108,9 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     channel.addEventListener('message', (event) => {
       if (typeof event.data === 'string' && event.data.length <= messageLimit) {
         addMessage('received', event.data)
+      } else if (event.data instanceof ArrayBuffer) {
+        const update = active.fileReceiver?.accept(event.data)
+        if (update) setFileUpdate(update)
       }
     }, { signal })
     channel.addEventListener('close', () => end(active), { signal })
@@ -105,7 +119,13 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
   function startSession(sessionId?: string) {
     const peer = new RTCPeerConnection({ iceServers: [] })
-    const active: Session = { peer, controller: new AbortController(), channel: null, sessionId }
+    const active: Session = {
+      peer,
+      controller: new AbortController(),
+      channel: null,
+      sessionId,
+      fileReceiver: isReceiver ? new FileReceiver() : null,
+    }
     session.current = active
     const { signal } = active.controller
 
@@ -216,6 +236,28 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       setError('')
     } catch {
       setError('Could not send the message. Try again or reconnect.')
+    }
+  }
+
+  async function transferFile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const active = session.current
+    const file = selectedFile
+    if (!connected || active?.channel?.readyState !== 'open' || !file || sendingFile) return
+
+    setSendingFile(true)
+    setFileError('')
+    setFileStatus('Sending file…')
+    try {
+      await sendFile(active.channel, file, active.controller.signal)
+      setFileStatus('File sent.')
+    } catch (cause) {
+      setFileStatus('')
+      setFileError(active.controller.signal.aborted
+        ? 'File transfer interrupted.'
+        : cause instanceof Error ? cause.message : 'Could not send the file.')
+    } finally {
+      setSendingFile(false)
     }
   }
 
@@ -334,10 +376,71 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
             </label>
             <button type="submit" disabled={!connected || !message.trim()}>Send</button>
           </form>
+          {isReceiver ? (
+            <section className="file-transfer" aria-labelledby="file-heading">
+              <h2 id="file-heading">Receive a file</h2>
+              <ReceivedFile update={fileUpdate} />
+            </section>
+          ) : (
+            <form className="file-transfer" onSubmit={transferFile} aria-labelledby="file-heading">
+              <h2 id="file-heading">Send a file</h2>
+              <label>
+                File
+                <input
+                  type="file"
+                  aria-describedby="file-size-limit"
+                  disabled={!connected || sendingFile}
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0] ?? null
+                    setSelectedFile(file)
+                    setFileStatus('')
+                    setFileError(file && file.size > maxFileSize ? 'Choose a file up to 25 MiB.' : '')
+                  }}
+                />
+              </label>
+              <p id="file-size-limit">Up to 25 MiB per file.</p>
+              <button type="submit" disabled={
+                !connected || !selectedFile || selectedFile.size > maxFileSize || sendingFile
+              }>Send file</button>
+              <p role="status">{fileStatus}</p>
+              {fileError && <p className="error" role="alert">{fileError}</p>}
+            </form>
+          )}
         </>
       )}
     </section>
   )
+}
+
+function ReceivedFile({ update }: { update: ReceiveUpdate | null }) {
+  if (!update) return <p>Files appear here when the other device sends them.</p>
+  if (update.status === 'interrupted') {
+    return <p className="error" role="alert">{update.message}</p>
+  }
+  if (update.status === 'ready') {
+    return <FileDownload name={update.name} blob={update.blob} />
+  }
+
+  const percent = update.size ? Math.floor((update.received * 100) / update.size) : 0
+  return (
+    <div className="file-progress">
+      <p>Receiving {update.name} · {percent}%</p>
+      <progress aria-label="File receive progress" value={update.received} max={update.size || 1} />
+    </div>
+  )
+}
+
+function FileDownload({ name, blob }: { name: string; blob: Blob }) {
+  const [download, setDownload] = useState<{ blob: Blob; url: string } | null>(null)
+
+  useEffect(() => {
+    const url = URL.createObjectURL(blob)
+    setDownload({ blob, url })
+    return () => URL.revokeObjectURL(url)
+  }, [blob])
+
+  if (download?.blob !== blob) return null
+  return <a href={download.url} download={name}>Download {name}</a>
 }
 
 function LocalCode({ code, label }: { code: string; label: 'Offer' | 'Answer' }) {
