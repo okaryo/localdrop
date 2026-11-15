@@ -1,6 +1,8 @@
 import { ArrowDown, ArrowUp, ExternalLink, Languages, LoaderCircle, QrCode, Wifi } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { connectionDiagnostics, createConnectionTrace, recordConnectionStates } from './connectionDiagnostics'
+import type { ConnectionTrace, FailureTrigger } from './connectionDiagnostics'
 import { FileDownload } from './FileDownload'
 import { useLanguage } from './LanguageProvider'
 import { PairingQr, QrCamera } from './QrExchange'
@@ -23,9 +25,9 @@ type Session = {
   controller: AbortController
   channel: RTCDataChannel | null
   fileReceiver: FileReceiver | null
+  trace: ConnectionTrace
   sessionId?: string
   connectionTimer?: number
-  answerApplied?: boolean
   iceConnected?: boolean
   channelOpened?: boolean
 }
@@ -146,6 +148,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const [answerApplied, setAnswerApplied] = useState(false)
   const [status, setStatus] = useState<UiMessage | null>(null)
   const [error, setError] = useState<UiMessage | null>(null)
+  const [diagnostics, setDiagnostics] = useState<string | null>(null)
   const [ended, setEnded] = useState(false)
   const [opened, setOpened] = useState(false)
   const [connected, setConnected] = useState(false)
@@ -192,7 +195,9 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     setError(failure?.message ?? null)
   }
 
-  function failConnection(active: Session, timedOut = false) {
+  function failConnection(active: Session, trigger: FailureTrigger) {
+    if (active.controller.signal.aborted) return
+    setDiagnostics(connectionDiagnostics(active.trace, active.peer, active.channel, role, trigger))
     const iceState = active.peer.iceConnectionState
     if (active.channelOpened) {
       end(active, {
@@ -206,8 +211,11 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       })
     } else {
       end(active, {
-        status: timedOut ? 'connectionTimedOut' : 'connectionFailed',
-        message: { key: active.answerApplied ? 'noConnectionAfterAnswer' : 'noConnection', values: { state: iceState } },
+        status: trigger === 'connection timeout' ? 'connectionTimedOut' : 'connectionFailed',
+        message: {
+          key: active.trace.answerAppliedAt === undefined ? 'noConnection' : 'noConnectionAfterAnswer',
+          values: { state: iceState },
+        },
       })
     }
   }
@@ -227,6 +235,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       active.channelOpened = true
       window.clearTimeout(active.connectionTimer)
       setError(null)
+      setDiagnostics(null)
       setOpened(true)
       setConnected(true)
       setStatus('connected')
@@ -241,7 +250,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     }, { signal })
     channel.addEventListener('close', () => {
       if (active.channelOpened) end(active)
-      else failConnection(active)
+      else failConnection(active, 'datachannel: closed before opening')
     }, { signal })
     if (channel.readyState === 'open') onOpen()
   }
@@ -254,19 +263,22 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       channel: null,
       sessionId,
       fileReceiver: null,
+      trace: createConnectionTrace(peer),
     }
     session.current = active
     const { signal } = active.controller
 
     peer.addEventListener('iceconnectionstatechange', () => {
+      recordConnectionStates(active.trace, peer)
       if (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') {
         active.iceConnected = true
         if (!active.channelOpened) setStatus('openingChannel')
       }
     }, { signal })
     peer.addEventListener('connectionstatechange', () => {
+      recordConnectionStates(active.trace, peer)
       if (peer.connectionState === 'failed') {
-        failConnection(active)
+        failConnection(active, 'connectionstatechange: failed')
       } else if (peer.connectionState === 'disconnected' && active.channelOpened) {
         setConnected(false)
         setStatus('connectionInterrupted')
@@ -295,14 +307,17 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     if (busy || opened || ended || (source === 'text' && scanStage)) return
     setScanStage(null)
     setError(null)
+    setDiagnostics(null)
     setBusy(true)
 
     let active = session.current
+    let operation: FailureTrigger | undefined
     let failureStatus: UiMessage = source === 'qr'
       ? (isReceiver ? 'invalidAnswerQr' : 'invalidOfferQr')
       : (isReceiver ? 'invalidAnswerText' : 'invalidOfferText')
     try {
       if (isReceiver && !localCode) {
+        operation = 'create offer or gather ICE candidates'
         failureStatus = 'offerFailed'
         setStatus('creatingOffer')
         const sessionId = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) =>
@@ -324,6 +339,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
           throw new AppError('wrongAnswer')
         }
         failureStatus = 'answerApplyFailed'
+        operation = 'setRemoteDescription: answer rejected'
         setStatus('applyingAnswer')
         try {
           await active.peer.setRemoteDescription(description)
@@ -331,15 +347,16 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
           throw new AppError('answerApplyHelp')
         }
         if (active.controller.signal.aborted) return
-        active.answerApplied = true
+        active.trace.answerAppliedAt = performance.now()
         setAnswerApplied(true)
         if (active.channel?.readyState !== 'open') {
           setStatus(active.iceConnected ? 'openingChannel' : 'checkingConnection')
           const pending = active
-          pending.connectionTimer = window.setTimeout(() => failConnection(pending, true), 20_000)
+          pending.connectionTimer = window.setTimeout(() => failConnection(pending, 'connection timeout'), 20_000)
         }
       } else if (!isReceiver) {
         failureStatus = 'offerApplyFailed'
+        operation = 'setRemoteDescription: offer rejected'
         setStatus('applyingOffer')
         active = startSession(description.sessionId)
         try {
@@ -349,6 +366,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         }
         if (active.controller.signal.aborted) return
         failureStatus = 'answerFailed'
+        operation = 'create answer or gather ICE candidates'
         setStatus('creatingAnswer')
         setLocalCode(await createLocalCode(
           active.peer, 'answer', active.controller.signal, description.sessionId,
@@ -358,6 +376,9 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     } catch (cause) {
       if (active?.controller.signal.aborted) return
 
+      if (active && operation) {
+        setDiagnostics(connectionDiagnostics(active.trace, active.peer, active.channel, role, operation))
+      }
       if (!localCode && session.current) {
         closeSession(session.current)
         session.current = null
@@ -434,6 +455,18 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         </div>
       </div>
       {error && <p className="error" role="alert">{t(error)}</p>}
+      {diagnostics && (
+        <details>
+          <summary>{t('connectionDiagnostics')}</summary>
+          <CopyableText
+            text={diagnostics}
+            label="connectionDiagnosticsText"
+            copyLabel="copyConnectionDiagnostics"
+            selectLabel="selectConnectionDiagnostics"
+            rows={7}
+          />
+        </details>
+      )}
 
       {showExchange && (
         <>
@@ -640,15 +673,31 @@ function FileProgress({ update }: { update: Extract<ActiveFileUpdate, { status: 
 }
 
 function LocalCode({ code, label }: { code: string; label: 'Offer' | 'Answer' }) {
+  return (
+    <CopyableText
+      text={code}
+      label={label === 'Offer' ? 'offerCode' : 'answerCode'}
+      copyLabel={label === 'Offer' ? 'copyOffer' : 'copyAnswer'}
+      selectLabel={label === 'Offer' ? 'selectOffer' : 'selectAnswer'}
+      rows={4}
+    />
+  )
+}
+
+function CopyableText({ text, label, copyLabel, selectLabel, rows }: {
+  text: string
+  label: UiMessage
+  copyLabel: UiMessage
+  selectLabel: UiMessage
+  rows: number
+}) {
   const { t } = useLanguage()
   const field = useRef<HTMLTextAreaElement>(null)
   const [copyStatus, setCopyStatus] = useState<UiMessage | null>(null)
-  const copyLabel = label === 'Offer' ? 'copyOffer' : 'copyAnswer'
-  const selectLabel = label === 'Offer' ? 'selectOffer' : 'selectAnswer'
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(code)
+      await navigator.clipboard.writeText(text)
       setCopyStatus('copied')
     } catch {
       field.current?.focus()
@@ -660,8 +709,8 @@ function LocalCode({ code, label }: { code: string; label: 'Offer' | 'Answer' })
   return (
     <div className="code">
       <label>
-        {t(label === 'Offer' ? 'offerCode' : 'answerCode')}
-        <textarea ref={field} readOnly value={code} rows={4} spellCheck={false} />
+        {t(label)}
+        <textarea ref={field} readOnly value={text} rows={rows} spellCheck={false} />
       </label>
       <div className="actions">
         <button className="secondary" type="button" onClick={copy}>
