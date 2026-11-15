@@ -171,3 +171,38 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
 }
+
+.pairing {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.pairing-qr {
+  display: block;
+  width: min(100%, 24rem);
+  height: auto;
+  justify-self: center;
+  image-rendering: pixelated;
+}
+
+.camera-preview {
+  position: relative;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: #18242a;
+}
+
+.camera-preview video {
+  display: block;
+  width: 100%;
+  max-height: 22rem;
+  object-fit: contain;
+}
+
+summary {
+  cursor: pointer;
+}
+
+.manual-code {
+  margin-top: 0.75rem;
+}

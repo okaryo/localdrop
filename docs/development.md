@@ -15,19 +15,18 @@ computer running Vite allows incoming connections to the dev server.
 
 ## Test the current prototype
 
-1. Choose the receive option on one device and select **Create offer**.
-2. Choose the send option on the other device. Paste the complete offer code
-   into the offer field and select **Create answer**.
-3. Paste the complete answer code into the answer field on the receiving device
-   and select **Apply answer**.
-4. When both pages show **Connected**, send a short message from each device and
-   check that it appears on the other screen.
+1. Open an HTTPS build in Chrome on both devices. Connect them to the same Wi-Fi.
+2. Choose the receive option on one device and select **Create offer**.
+3. Choose the send option on the other device, select **Scan offer QR code**,
+   and point the camera at the offer. The answer QR code appears after scanning.
+4. On the receiving device, select **Scan answer QR code** and scan the answer.
+5. When both pages show **Connected**, send a short message in each direction.
 
-On a local HTTP URL, use **Select offer** or **Select answer**, then copy the
-selected text using your device’s copy command. Share connection codes privately.
-Use **Start over** on both devices to create a fresh pair of codes. If the pages
-load but the peer connection fails, check Wi-Fi client isolation, firewall
-settings, and VPN settings.
+Use **Use a text code** if your browser cannot access the camera or read the QR
+code. It lets you copy and paste the offer and answer manually, including on
+local HTTP. Share connection codes privately. Use **Start over** on both devices
+to create a fresh pair of codes. If the pages load but the peer connection
+fails, check Wi-Fi client isolation, firewall settings, and VPN settings.
 
 ## Build
 

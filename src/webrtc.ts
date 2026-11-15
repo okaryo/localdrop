@@ -1,8 +1,12 @@
 type SignalType = 'offer' | 'answer'
 
-export function readDescription(text: string, expectedType: SignalType): RTCSessionDescriptionInit {
-  const invalidCode = `Paste the complete ${expectedType} code from the other device.`
-  if (text.length > 32_768) throw new Error(invalidCode)
+export const maxCodeLength = 32_768
+
+type Description = { type: SignalType; sdp: string; sessionId?: string }
+
+export function readDescription(text: string, expectedType: SignalType): Description {
+  const invalidCode = `Scan or paste the complete ${expectedType} from the other device.`
+  if (text.length > maxCodeLength) throw new Error(invalidCode)
 
   let value: unknown
   try {
@@ -23,13 +27,19 @@ export function readDescription(text: string, expectedType: SignalType): RTCSess
     throw new Error(invalidCode)
   }
 
-  return { type: expectedType, sdp: value.sdp }
+  const sessionId = 'sessionId' in value ? value.sessionId : undefined
+  if (sessionId !== undefined && (typeof sessionId !== 'string' || !/^[0-9a-f]{24}$/.test(sessionId))) {
+    throw new Error(invalidCode)
+  }
+
+  return { type: expectedType, sdp: value.sdp, sessionId }
 }
 
 export async function createLocalCode(
   peer: RTCPeerConnection,
   type: SignalType,
   signal: AbortSignal,
+  sessionId: string | undefined,
 ): Promise<string> {
   const description = type === 'offer' ? await peer.createOffer() : await peer.createAnswer()
   signal.throwIfAborted()
@@ -42,7 +52,7 @@ export async function createLocalCode(
     throw new Error('No local connection candidates were found. Check your Wi-Fi and browser permissions.')
   }
 
-  return JSON.stringify({ type: local.type, sdp: local.sdp })
+  return JSON.stringify({ type: local.type, sdp: local.sdp, sessionId })
 }
 
 function waitForIceGathering(peer: RTCPeerConnection, signal: AbortSignal): Promise<void> {

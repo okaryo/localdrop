@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { createLocalCode, readDescription } from './webrtc'
+import { PairingQr, QrCamera } from './QrExchange'
+import { createLocalCode, maxCodeLength, readDescription } from './webrtc'
 
 type Role = 'receiver' | 'sender'
 type Lane = 'sent' | 'received'
@@ -9,6 +10,7 @@ type Session = {
   peer: RTCPeerConnection
   controller: AbortController
   channel: RTCDataChannel | null
+  sessionId?: string
   connectionTimer?: number
 }
 
@@ -47,6 +49,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const session = useRef<Session | null>(null)
   const nextMessageId = useRef(0)
   const [busy, setBusy] = useState(false)
+  const [scanning, setScanning] = useState(false)
   const [remoteCode, setRemoteCode] = useState('')
   const [localCode, setLocalCode] = useState('')
   const [answerApplied, setAnswerApplied] = useState(false)
@@ -97,9 +100,9 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     if (channel.readyState === 'open') onOpen()
   }
 
-  function startSession() {
+  function startSession(sessionId?: string) {
     const peer = new RTCPeerConnection({ iceServers: [] })
-    const active: Session = { peer, controller: new AbortController(), channel: null }
+    const active: Session = { peer, controller: new AbortController(), channel: null, sessionId }
     session.current = active
     const { signal } = active.controller
 
@@ -130,9 +133,9 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     return active
   }
 
-  async function exchange(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (busy || opened || ended) return
+  async function exchange(code: string, source: 'text' | 'qr') {
+    if (busy || opened || ended || (source === 'text' && scanning)) return
+    setScanning(false)
     setError('')
     setBusy(true)
 
@@ -140,14 +143,26 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     try {
       if (isReceiver && !localCode) {
         setStatus('Creating offer…')
-        active = startSession()
-        const code = await createLocalCode(active.peer, 'offer', active.controller.signal)
-        setLocalCode(code)
+        const sessionId = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) =>
+          byte.toString(16).padStart(2, '0'),
+        ).join('')
+        active = startSession(sessionId)
+        setLocalCode(await createLocalCode(active.peer, 'offer', active.controller.signal, sessionId))
         setStatus('Waiting for the answer')
-      } else if (isReceiver && active) {
-        const answer = readDescription(remoteCode, 'answer')
+        return
+      }
+
+      const description = readDescription(code, isReceiver ? 'answer' : 'offer')
+      if (source === 'qr' && !description.sessionId) {
+        throw new Error('This QR code is missing a pairing ID. Create a new code and try again.')
+      }
+
+      if (isReceiver && active) {
+        if (description.sessionId && description.sessionId !== active.sessionId) {
+          throw new Error('This answer is for a different offer. Scan or paste the answer for this session.')
+        }
         try {
-          await active.peer.setRemoteDescription(answer)
+          await active.peer.setRemoteDescription(description)
         } catch {
           throw new Error('Could not apply the answer. Check that it was created from this offer.')
         }
@@ -159,16 +174,16 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
           pending.connectionTimer = window.setTimeout(() => end(pending, connectionError), 20_000)
         }
       } else if (!isReceiver) {
-        const offer = readDescription(remoteCode, 'offer')
         setStatus('Creating answer…')
-        active = startSession()
+        active = startSession(description.sessionId)
         try {
-          await active.peer.setRemoteDescription(offer)
+          await active.peer.setRemoteDescription(description)
         } catch {
           throw new Error('Could not apply the offer. Ask the Mac to create a new offer.')
         }
-        const code = await createLocalCode(active.peer, 'answer', active.controller.signal)
-        setLocalCode(code)
+        setLocalCode(await createLocalCode(
+          active.peer, 'answer', active.controller.signal, description.sessionId,
+        ))
         setStatus('Waiting for the Mac to apply the answer')
       }
     } catch (cause) {
@@ -203,6 +218,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
 
   const showRemoteInput = isReceiver ? Boolean(localCode) && !answerApplied : !localCode
   const showExchange = !opened && !ended
+  const showLocalCode = Boolean(localCode) && !answerApplied
+  const canScan = window.isSecureContext && Boolean(navigator.mediaDevices?.getUserMedia)
+  const localLabel = isReceiver ? 'Offer' : 'Answer'
+  const remoteLabel = isReceiver ? 'answer' : 'offer'
 
   return (
     <section className="card" aria-labelledby="connection-heading">
@@ -216,31 +235,76 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       {error && <p className="error" role="alert">{error}</p>}
 
       {showExchange && (
-        <form onSubmit={exchange}>
-          {localCode && (isReceiver ? !answerApplied : true) && (
-            <LocalCode code={localCode} label={isReceiver ? 'Offer' : 'Answer'} />
-          )}
-          {showRemoteInput && (
-            <label>
-              {isReceiver ? 'Answer from Android' : 'Offer from Mac'}
-              <textarea
-                rows={4}
-                maxLength={32_769}
-                value={remoteCode}
-                onChange={(event) => setRemoteCode(event.target.value)}
-                disabled={busy}
-                spellCheck={false}
-                autoCapitalize="off"
-                autoCorrect="off"
-              />
-            </label>
-          )}
-          {(!localCode || showRemoteInput) && (
-            <button type="submit" disabled={busy || (showRemoteInput && !remoteCode.trim())}>
-              {isReceiver ? (localCode ? 'Apply answer' : 'Create offer') : 'Create answer'}
+        <>
+          {isReceiver && !localCode && (
+            <button type="button" disabled={busy} onClick={() => void exchange('', 'text')}>
+              Create offer
             </button>
           )}
-        </form>
+          {!scanning && showLocalCode && session.current?.sessionId && (
+            <div className="pairing">
+              <p>Scan this {localLabel.toLowerCase()} with LocalDrop on the other device.</p>
+              <PairingQr code={localCode} label={localLabel} />
+            </div>
+          )}
+          {showRemoteInput && (
+            scanning ? (
+              <div className="pairing">
+                <p>Point the camera at the {remoteLabel} QR code.</p>
+                <QrCamera
+                  onScan={(data) => void exchange(data, 'qr')}
+                  onError={(message) => {
+                    setScanning(false)
+                    setError(message)
+                  }}
+                />
+                <button className="secondary" type="button" onClick={() => setScanning(false)}>
+                  Cancel scan
+                </button>
+              </div>
+            ) : canScan ? (
+              <button type="button" disabled={busy} onClick={() => {
+                setError('')
+                setScanning(true)
+              }}>
+                Scan {remoteLabel} QR code
+              </button>
+            ) : (
+              <p>QR scanning requires camera access on an HTTPS page. You can use a text code here.</p>
+            )
+          )}
+          {!scanning && (showLocalCode || showRemoteInput) && (
+            <details open={showRemoteInput && !canScan ? true : undefined}>
+              <summary>Use a text code</summary>
+              <form className="manual-code" onSubmit={(event) => {
+                event.preventDefault()
+                void exchange(remoteCode, 'text')
+              }}>
+                {showLocalCode && <LocalCode code={localCode} label={localLabel} />}
+                {showRemoteInput && (
+                  <>
+                    <label>
+                      {isReceiver ? 'Answer from Android' : 'Offer from Mac'}
+                      <textarea
+                        rows={4}
+                        maxLength={maxCodeLength + 1}
+                        value={remoteCode}
+                        onChange={(event) => setRemoteCode(event.target.value)}
+                        disabled={busy}
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                      />
+                    </label>
+                    <button type="submit" disabled={busy || !remoteCode.trim()}>
+                      {isReceiver ? 'Apply answer' : 'Create answer'}
+                    </button>
+                  </>
+                )}
+              </form>
+            </details>
+          )}
+        </>
       )}
 
       {opened && (
