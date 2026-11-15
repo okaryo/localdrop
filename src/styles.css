@@ -23,6 +23,24 @@ header {
   margin-bottom: 1.5rem;
 }
 
+.app-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 1rem;
+}
+
+.language-select {
+  min-height: 44px;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #849892;
+  border-radius: 0.5rem;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+}
+
 h1,
 h2,
 p {

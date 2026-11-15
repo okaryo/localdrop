@@ -1,3 +1,4 @@
+import { AppError } from './i18n'
 import QRCode from 'qrcode'
 import { maxCodeLength } from './webrtc'
 
@@ -33,10 +34,10 @@ export async function makeQrImage(code: string): Promise<string> {
 }
 
 export async function readQrCode(data: string): Promise<string> {
-  const invalidQr = 'This is not a valid LocalDrop QR code. Scan the code from the other device.'
+  const invalidQr = 'invalidPairingQr'
   const encoded = data.slice(prefix.length)
   if (data.length > maxQrLength || !data.startsWith(prefix) || !/^[\w-]+$/.test(encoded)) {
-    throw new Error(invalidQr)
+    throw new AppError(invalidQr)
   }
 
   try {
@@ -53,7 +54,7 @@ export async function readQrCode(data: string): Promise<string> {
         length += value.byteLength
         if (length > maxCodeLength) {
           await reader.cancel()
-          throw new Error('Connection code is too long.')
+          throw new AppError(invalidQr)
         }
         text += decoder.decode(value, { stream: true })
       }
@@ -61,6 +62,6 @@ export async function readQrCode(data: string): Promise<string> {
       reader.releaseLock()
     }
   } catch {
-    throw new Error(invalidQr)
+    throw new AppError(invalidQr)
   }
 }

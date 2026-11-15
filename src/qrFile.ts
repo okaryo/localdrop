@@ -1,3 +1,4 @@
+import { AppError } from './i18n'
 import { fromBase64Url, toBase64Url } from './qr'
 
 export const maxQrFileSize = 4 * 1024
@@ -24,9 +25,9 @@ async function hash(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 export async function splitQrFile(file: File): Promise<string[]> {
-  if (file.size > maxQrFileSize) throw new Error('Choose a file up to 4 KiB for QR transfer.')
+  if (file.size > maxQrFileSize) throw new AppError({ key: 'selectSmallerQrFile', values: { limit: maxQrFileSize / 1024 } })
   const name = new TextEncoder().encode(file.name)
-  if (!name.length || name.length > maxNameSize) throw new Error('Choose a file with a shorter name.')
+  if (!name.length || name.length > maxNameSize) throw new AppError('shorterFileName')
 
   const bytes = new Uint8Array(nameLengthSize + name.length + file.size)
   new DataView(bytes.buffer).setUint16(0, name.length)
@@ -42,52 +43,52 @@ export async function splitQrFile(file: File): Promise<string[]> {
 }
 
 export function readQrFilePart(text: string): QrFilePart {
-  const invalid = 'This is not a LocalDrop file QR code.'
+  const invalid = 'invalidFileQr'
   const match = text.length <= maxPartLength + 55 && partPattern.exec(text)
-  if (!match) throw new Error(invalid)
+  if (!match) throw new AppError(invalid)
 
   const [, digest, part, count, encoded] = match
   const number = Number(part)
   const total = Number(count)
-  if (total > maxPartCount || number > total || encoded.length > maxPartLength) throw new Error(invalid)
+  if (total > maxPartCount || number > total || encoded.length > maxPartLength) throw new AppError(invalid)
 
   let bytes: Uint8Array<ArrayBuffer>
   try {
     bytes = fromBase64Url(encoded)
   } catch {
-    throw new Error(invalid)
+    throw new AppError(invalid)
   }
-  if (bytes.length < 1 || (number < total && bytes.length !== partSize)) throw new Error(invalid)
+  if (bytes.length < 1 || (number < total && bytes.length !== partSize)) throw new AppError(invalid)
 
   return { digest, number, total, bytes }
 }
 
 export async function restoreQrFile(digest: string, parts: ReadonlyMap<number, Uint8Array<ArrayBuffer>>): Promise<QrFile> {
-  const invalid = 'Could not verify the file. Scan all of its QR codes again.'
+  const invalid = 'qrFileVerifyFailed'
   const length = [...parts.values()].reduce((total, part) => total + part.length, 0)
   if (length < nameLengthSize + 1 || length > nameLengthSize + maxNameSize + maxQrFileSize) {
-    throw new Error(invalid)
+    throw new AppError(invalid)
   }
 
   const bytes = new Uint8Array(length)
   let offset = 0
   for (let number = 1; number <= parts.size; number++) {
     const part = parts.get(number)
-    if (!part) throw new Error(invalid)
+    if (!part) throw new AppError(invalid)
     bytes.set(part, offset)
     offset += part.length
   }
-  if (await hash(bytes) !== digest) throw new Error(invalid)
+  if (await hash(bytes) !== digest) throw new AppError(invalid)
 
   const nameLength = new DataView(bytes.buffer).getUint16(0)
   const fileStart = nameLengthSize + nameLength
   if (!nameLength || nameLength > maxNameSize || fileStart > length || length - fileStart > maxQrFileSize) {
-    throw new Error(invalid)
+    throw new AppError(invalid)
   }
   try {
     const name = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(nameLengthSize, fileStart))
     return { name, blob: new Blob([bytes.subarray(fileStart)]) }
   } catch {
-    throw new Error(invalid)
+    throw new AppError(invalid)
   }
 }

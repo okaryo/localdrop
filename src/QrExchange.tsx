@@ -1,5 +1,8 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type QrScanner from 'qr-scanner'
+import { useLanguage } from './LanguageProvider'
+import { errorMessage } from './i18n'
+import type { Message } from './i18n'
 import { makeQrImage } from './qr'
 
 export async function prepareQrCamera(): Promise<void> {
@@ -8,6 +11,7 @@ export async function prepareQrCamera(): Promise<void> {
 }
 
 export function PairingQr({ code, label }: { code: string; label: 'Offer' | 'Answer' }) {
+  const { t } = useLanguage()
   const [image, setImage] = useState('')
   const [failed, setFailed] = useState(false)
 
@@ -20,10 +24,10 @@ export function PairingQr({ code, label }: { code: string; label: 'Offer' | 'Ans
     return () => { disposed = true }
   }, [code])
 
-  if (failed) return <p>Could not show a QR code. Use the text code instead.</p>
-  if (!image) return <p role="status">Creating QR code…</p>
+  if (failed) return <p>{t('pairingQrUnavailable')}</p>
+  if (!image) return <p role="status">{t('creatingQr')}</p>
 
-  return <img className="pairing-qr" src={image} alt={`${label} QR code`} />
+  return <img className="pairing-qr" src={image} alt={t(label === 'Offer' ? 'offerQr' : 'answerQr')} />
 }
 
 export function QrCamera({
@@ -37,8 +41,9 @@ export function QrCamera({
   decode?: (data: string) => Promise<string>
   onReady: () => void
   onScan: (data: string) => void
-  onError: (message: string) => void
+  onError: (message: Message) => void
 }) {
+  const { t } = useLanguage()
   const video = useRef<HTMLVideoElement>(null)
   const handleReady = useEffectEvent(onReady)
   const handleScan = useEffectEvent(onScan)
@@ -64,7 +69,7 @@ export function QrCamera({
           }
           void decode(data).then(
             (code) => { if (!disposed) handleScan(code) },
-            (error: Error) => { if (!disposed) handleError(error.message) },
+            (cause: unknown) => { if (!disposed) handleError(errorMessage(cause, 'invalidPairingQr')) },
           )
         }, {
           preferredCamera: 'environment',
@@ -88,7 +93,7 @@ export function QrCamera({
         await scanner.start()
         if (!disposed && !accepted) handleReady()
       } catch {
-        if (!disposed) handleError('Could not start the camera. Check camera permissions and try again.')
+        if (!disposed) handleError('cameraFailed')
       }
     }
 
@@ -101,7 +106,7 @@ export function QrCamera({
 
   return (
     <div className="camera-preview">
-      <video ref={video} autoPlay muted playsInline aria-label="Camera preview" />
+      <video ref={video} autoPlay muted playsInline aria-label={t('cameraPreview')} />
     </div>
   )
 }

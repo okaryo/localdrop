@@ -13,6 +13,10 @@ Connect both devices to the same Wi-Fi and open the **Network** URL printed by
 Vite in Chrome on both devices. If the page does not load, check that the
 computer running Vite allows incoming connections to the dev server.
 
+LocalDrop defaults to Japanese if the browser language is Japanese. Use the
+language picker to switch between Japanese and English. LocalDrop remembers
+that choice in the browser.
+
 ## Test QR file transfer offline
 
 1. Open LocalDrop in Chrome on both devices. Use an HTTPS build or, for two

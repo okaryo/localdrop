@@ -1,3 +1,6 @@
+import { AppError } from './i18n'
+import type { Message } from './i18n'
+
 export const maxFileSize = 25 * 1024 * 1024
 const chunkSize = 16 * 1024 - 1
 const maxMetadataSize = 4096
@@ -12,7 +15,7 @@ type IncomingFile = FileMetadata & { chunks: Uint8Array<ArrayBuffer>[]; received
 export type ReceiveUpdate =
   | { status: 'receiving'; name: string; size: number; received: number }
   | { status: 'ready'; name: string; blob: Blob }
-  | { status: 'interrupted'; message: string }
+  | { status: 'interrupted'; message: Message }
 
 function makeFrame(type: number, payload?: Uint8Array): Uint8Array<ArrayBuffer> {
   const frame = new Uint8Array(1 + (payload?.byteLength ?? 0))
@@ -47,10 +50,10 @@ function waitForBuffer(channel: RTCDataChannel, threshold: number, signal: Abort
 }
 
 export async function sendFile(channel: RTCDataChannel, file: File, signal: AbortSignal): Promise<void> {
-  if (file.size > maxFileSize) throw new Error('Choose a file up to 25 MiB.')
+  if (file.size > maxFileSize) throw new AppError({ key: 'selectSmallerFile', values: { limit: maxFileSize / (1024 * 1024) } })
 
   const metadata = new TextEncoder().encode(JSON.stringify({ name: file.name, size: file.size }))
-  if (metadata.byteLength > maxMetadataSize) throw new Error('The file name is too long.')
+  if (metadata.byteLength > maxMetadataSize) throw new AppError('fileNameTooLong')
 
   signal.throwIfAborted()
   channel.send(makeFrame(frameType.start, metadata))
@@ -87,7 +90,7 @@ export class FileReceiver {
         const metadata = readMetadata(bytes.subarray(1))
         if (!metadata) {
           this.active = null
-          return { status: 'interrupted', message: 'Could not accept the file information.' }
+          return { status: 'interrupted', message: 'invalidFileInfo' }
         }
         this.active = { ...metadata, chunks: [], received: 0 }
         return { status: 'receiving', ...metadata, received: 0 }
@@ -98,7 +101,7 @@ export class FileReceiver {
         const chunk = bytes.subarray(1)
         const received = file.received + chunk.byteLength
         if (chunk.byteLength === 0 || chunk.byteLength > chunkSize || received > file.size) {
-          return this.interrupt('The incoming file data did not match the expected size.')
+          return this.interrupt('fileSizeMismatch')
         }
         file.chunks.push(chunk)
         const previousPercent = Math.floor((file.received * 100) / file.size)
@@ -110,19 +113,19 @@ export class FileReceiver {
         const file = this.active
         if (!file) return null
         if (file.received !== file.size || bytes.byteLength !== 1) {
-          return this.interrupt('The file ended before all its data arrived.')
+          return this.interrupt('incompleteFile')
         }
         this.active = null
         return { status: 'ready', name: file.name, blob: new Blob(file.chunks) }
       }
       case frameType.abort:
-        return this.interrupt('File transfer interrupted.')
+        return this.interrupt()
       default:
         return null
     }
   }
 
-  interrupt(message = 'File transfer interrupted.'): ReceiveUpdate | null {
+  interrupt(message: Message = 'fileInterrupted'): ReceiveUpdate | null {
     if (!this.active) return null
     this.active = null
     return { status: 'interrupted', message }

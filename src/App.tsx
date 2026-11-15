@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent, ReactNode } from 'react'
+import type { FormEvent } from 'react'
 import { FileDownload } from './FileDownload'
+import { useLanguage } from './LanguageProvider'
 import { PairingQr, QrCamera } from './QrExchange'
 import { QrFiles } from './QrFiles'
 import { FileReceiver, maxFileSize, sendFile } from './fileTransfer'
 import type { ReceiveUpdate } from './fileTransfer'
+import { AppError, errorMessage } from './i18n'
+import type { Message as UiMessage } from './i18n'
 import { readQrCode } from './qr'
 import { createLocalCode, maxCodeLength, readDescription } from './webrtc'
 
@@ -12,7 +15,7 @@ type Role = 'receiver' | 'sender'
 type ScanStage = 'starting' | 'scanning'
 type Lane = 'sent' | 'received'
 type Message = { id: number; lane: Lane; text: string }
-type ConnectionFailure = { status: string; message: string }
+type ConnectionFailure = { status: UiMessage; message: UiMessage }
 type CompletedFile = Extract<ReceiveUpdate, { status: 'ready' }>
 type ActiveFileUpdate = Exclude<ReceiveUpdate, CompletedFile>
 type Session = {
@@ -28,8 +31,10 @@ type Session = {
 }
 
 const messageLimit = 500
+const fileLimitMiB = maxFileSize / (1024 * 1024)
 
 export function App() {
+  const { language, setLanguage, t } = useLanguage()
   const [role, setRole] = useState<Role | null>(null)
   const [qrFiles, setQrFiles] = useState(false)
   const supported = typeof RTCPeerConnection === 'function'
@@ -37,8 +42,19 @@ export function App() {
   return (
     <main className={role ? 'shell wifi-shell' : 'shell'}>
       <header>
-        <h1>LocalDrop</h1>
-        <p>Send files and messages between nearby devices.</p>
+        <div className="app-heading">
+          <h1>LocalDrop</h1>
+          <select
+            className="language-select"
+            aria-label={t('language')}
+            value={language}
+            onChange={(event) => setLanguage(event.currentTarget.value === 'ja' ? 'ja' : 'en')}
+          >
+            <option value="en" lang="en">English</option>
+            <option value="ja" lang="ja">日本語</option>
+          </select>
+        </div>
+        <p>{t('tagline')}</p>
       </header>
       {qrFiles ? (
         <QrFiles onBack={() => setQrFiles(false)} />
@@ -47,34 +63,35 @@ export function App() {
       ) : (
         <>
           <section className="card" aria-labelledby="device-heading">
-            <h2 id="device-heading">Transfer over Wi-Fi</h2>
+            <h2 id="device-heading">{t('wifiTransfer')}</h2>
             {supported ? (
               <>
-                <p>Connect both devices to the same Wi-Fi. Start on the device receiving the file.</p>
+                <p>{t('wifiStart')}</p>
                 <div className="actions">
-                  <button onClick={() => setRole('receiver')}>Receive</button>
-                  <button className="secondary" onClick={() => setRole('sender')}>Send</button>
+                  <button onClick={() => setRole('receiver')}>{t('receive')}</button>
+                  <button className="secondary" onClick={() => setRole('sender')}>{t('send')}</button>
                 </div>
               </>
             ) : (
-              <p role="alert">This browser does not support WebRTC. Open LocalDrop in Chrome to use Wi-Fi transfer.</p>
+              <p role="alert">{t('unsupportedWebrtc')}</p>
             )}
           </section>
           <section className="card" aria-labelledby="qr-heading">
-            <h2 id="qr-heading">Transfer by QR code</h2>
-            <p>Send a file up to 4 KiB without a network connection.</p>
-            <button className="secondary" onClick={() => setQrFiles(true)}>QR file transfer</button>
+            <h2 id="qr-heading">{t('transferByQr')}</h2>
+            <p>{t('qrIntro')}</p>
+            <button className="secondary" onClick={() => setQrFiles(true)}>{t('qrFileTransfer')}</button>
           </section>
         </>
       )}
       <footer className="trademark">
-        QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.
+        {t('trademark')}
       </footer>
     </main>
   )
 }
 
 function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
+  const { t } = useLanguage()
   const isReceiver = role === 'receiver'
   const session = useRef<Session | null>(null)
   const nextMessageId = useRef(0)
@@ -83,8 +100,8 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const [remoteCode, setRemoteCode] = useState('')
   const [localCode, setLocalCode] = useState('')
   const [answerApplied, setAnswerApplied] = useState(false)
-  const [status, setStatus] = useState('')
-  const [error, setError] = useState('')
+  const [status, setStatus] = useState<UiMessage | null>(null)
+  const [error, setError] = useState<UiMessage | null>(null)
   const [ended, setEnded] = useState(false)
   const [opened, setOpened] = useState(false)
   const [connected, setConnected] = useState(false)
@@ -94,14 +111,15 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const [completedFiles, setCompletedFiles] = useState<CompletedFile[]>([])
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [sendingFile, setSendingFile] = useState(false)
-  const [fileStatus, setFileStatus] = useState('')
-  const [fileError, setFileError] = useState('')
-  const remoteLabel = isReceiver ? 'answer' : 'offer'
+  const [fileStatus, setFileStatus] = useState<UiMessage | null>(null)
+  const [fileError, setFileError] = useState<UiMessage | null>(null)
   const oversizedFile = selectedFiles.find((file) => file.size > maxFileSize)
-  const displayedFileError = fileError || (oversizedFile ? `${oversizedFile.name} exceeds the 25 MiB file limit.` : '')
-  const displayedStatus = scanStage === 'starting'
-    ? 'Starting camera…'
-    : scanStage === 'scanning' ? `Looking for the ${remoteLabel} QR code…` : status
+  const displayedFileError: UiMessage | null = fileError ?? (oversizedFile
+    ? { key: 'fileTooLarge', values: { name: oversizedFile.name, limit: fileLimitMiB } }
+    : null)
+  const displayedStatus: UiMessage | null = scanStage === 'starting'
+    ? 'cameraStarting'
+    : scanStage === 'scanning' ? (isReceiver ? 'lookingForAnswer' : 'lookingForOffer') : status
 
   useEffect(() => () => {
     if (session.current) closeSession(session.current)
@@ -129,28 +147,26 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     setScanStage(null)
     setConnected(false)
     setEnded(true)
-    setStatus(failure?.status ?? 'Disconnected')
-    setError(failure?.message ?? '')
+    setStatus(failure?.status ?? 'disconnected')
+    setError(failure?.message ?? null)
   }
 
   function failConnection(active: Session, timedOut = false) {
     const iceState = active.peer.iceConnectionState
     if (active.channelOpened) {
       end(active, {
-        status: 'WebRTC connection lost',
-        message: 'Start over on both devices to reconnect.',
+        status: 'connectionLost',
+        message: 'reconnect',
       })
     } else if (active.iceConnected || iceState === 'connected' || iceState === 'completed') {
       end(active, {
-        status: 'Data channel did not open',
-        message: 'WebRTC found a network path, but the data channel never opened. Start over on both devices.',
+        status: 'channelNotOpen',
+        message: 'channelNotOpenHelp',
       })
     } else {
       end(active, {
-        status: timedOut ? 'WebRTC connection timed out' : 'WebRTC connection failed',
-        message: (active.answerApplied ? 'The answer was applied. ' : '')
-          + `No direct connection was established (ICE state: ${iceState}). `
-          + 'Check that both devices can reach each other on the same Wi-Fi, then start over.',
+        status: timedOut ? 'connectionTimedOut' : 'connectionFailed',
+        message: { key: active.answerApplied ? 'noConnectionAfterAnswer' : 'noConnection', values: { state: iceState } },
       })
     }
   }
@@ -163,10 +179,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     function onOpen() {
       active.channelOpened = true
       window.clearTimeout(active.connectionTimer)
-      setError('')
+      setError(null)
       setOpened(true)
       setConnected(true)
-      setStatus('Connected')
+      setStatus('connected')
     }
 
     channel.addEventListener('open', onOpen, { signal })
@@ -199,7 +215,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     peer.addEventListener('iceconnectionstatechange', () => {
       if (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') {
         active.iceConnected = true
-        if (!active.channelOpened) setStatus('Opening data channel…')
+        if (!active.channelOpened) setStatus('openingChannel')
       }
     }, { signal })
     peer.addEventListener('connectionstatechange', () => {
@@ -207,10 +223,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         failConnection(active)
       } else if (peer.connectionState === 'disconnected' && active.channelOpened) {
         setConnected(false)
-        setStatus('Connection interrupted')
+        setStatus('connectionInterrupted')
       } else if (peer.connectionState === 'connected' && active.channel?.readyState === 'open') {
         setConnected(true)
-        setStatus('Connected')
+        setStatus('connected')
       }
     }, { signal })
 
@@ -232,64 +248,66 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   async function exchange(code: string, source: 'text' | 'qr') {
     if (busy || opened || ended || (source === 'text' && scanStage)) return
     setScanStage(null)
-    setError('')
+    setError(null)
     setBusy(true)
 
     let active = session.current
-    let failureStatus = `Invalid ${remoteLabel} ${source === 'qr' ? 'QR code' : 'text code'}`
+    let failureStatus: UiMessage = source === 'qr'
+      ? (isReceiver ? 'invalidAnswerQr' : 'invalidOfferQr')
+      : (isReceiver ? 'invalidAnswerText' : 'invalidOfferText')
     try {
       if (isReceiver && !localCode) {
-        failureStatus = 'Could not create the offer'
-        setStatus('Creating offer…')
+        failureStatus = 'offerFailed'
+        setStatus('creatingOffer')
         const sessionId = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) =>
           byte.toString(16).padStart(2, '0'),
         ).join('')
         active = startSession(sessionId)
         setLocalCode(await createLocalCode(active.peer, 'offer', active.controller.signal, sessionId))
-        setStatus('Waiting for the answer')
+        setStatus('waitingForAnswer')
         return
       }
 
       const description = readDescription(code, isReceiver ? 'answer' : 'offer')
       if (source === 'qr' && !description.sessionId) {
-        throw new Error('This QR code is missing a pairing ID. Create a new code and try again.')
+        throw new AppError('missingPairingId')
       }
 
       if (isReceiver && active) {
         if (description.sessionId && description.sessionId !== active.sessionId) {
-          throw new Error('This answer is for a different offer. Scan or paste the answer for this session.')
+          throw new AppError('wrongAnswer')
         }
-        failureStatus = 'Could not apply the answer'
-        setStatus('Applying answer…')
+        failureStatus = 'answerApplyFailed'
+        setStatus('applyingAnswer')
         try {
           await active.peer.setRemoteDescription(description)
         } catch {
-          throw new Error('Check that the answer was created from the offer shown on this page.')
+          throw new AppError('answerApplyHelp')
         }
         if (active.controller.signal.aborted) return
         active.answerApplied = true
         setAnswerApplied(true)
         if (active.channel?.readyState !== 'open') {
-          setStatus(active.iceConnected ? 'Opening data channel…' : 'Checking WebRTC connection…')
+          setStatus(active.iceConnected ? 'openingChannel' : 'checkingConnection')
           const pending = active
           pending.connectionTimer = window.setTimeout(() => failConnection(pending, true), 20_000)
         }
       } else if (!isReceiver) {
-        failureStatus = 'Could not apply the offer'
-        setStatus('Applying offer…')
+        failureStatus = 'offerApplyFailed'
+        setStatus('applyingOffer')
         active = startSession(description.sessionId)
         try {
           await active.peer.setRemoteDescription(description)
         } catch {
-          throw new Error('Ask the receiving device to create a new offer.')
+          throw new AppError('offerApplyHelp')
         }
         if (active.controller.signal.aborted) return
-        failureStatus = 'Could not create the answer'
-        setStatus('Creating answer…')
+        failureStatus = 'answerFailed'
+        setStatus('creatingAnswer')
         setLocalCode(await createLocalCode(
           active.peer, 'answer', active.controller.signal, description.sessionId,
         ))
-        setStatus('Waiting for the receiving device to connect')
+        setStatus('waitingForReceiver')
       }
     } catch (cause) {
       if (active?.controller.signal.aborted) return
@@ -299,7 +317,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
         session.current = null
       }
       setStatus(failureStatus)
-      setError(cause instanceof Error ? cause.message : 'Could not set up the connection.')
+      setError(errorMessage(cause, 'setupFailed'))
     } finally {
       setBusy(false)
     }
@@ -315,9 +333,9 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       channel.send(text)
       addMessage('sent', text)
       setMessage('')
-      setError('')
+      setError(null)
     } catch {
-      setError('Could not send the message. Try again or reconnect.')
+      setError('messageFailed')
     }
   }
 
@@ -330,18 +348,22 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     }
 
     setSendingFile(true)
-    setFileError('')
+    setFileError(null)
     try {
       for (const [index, file] of selectedFiles.entries()) {
-        setFileStatus(`Sending ${index + 1} of ${selectedFiles.length} · ${file.name}`)
+        setFileStatus({
+          key: 'sendingFile', values: { index: index + 1, total: selectedFiles.length, name: file.name },
+        })
         await sendFile(channel, file, active.controller.signal)
       }
-      setFileStatus(selectedFiles.length === 1 ? 'File sent.' : `${selectedFiles.length} files sent.`)
+      setFileStatus(selectedFiles.length === 1
+        ? 'fileSent'
+        : { key: 'filesSent', values: { count: selectedFiles.length } })
     } catch (cause) {
-      setFileStatus('')
+      setFileStatus(null)
       setFileError(active.controller.signal.aborted
-        ? 'File transfer interrupted.'
-        : cause instanceof Error ? cause.message : 'Could not send the file.')
+        ? 'fileInterrupted'
+        : errorMessage(cause, 'fileSendFailed'))
     } finally {
       setSendingFile(false)
     }
@@ -357,84 +379,78 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   return (
     <section className="card" aria-labelledby="connection-heading">
       <div className="card-heading">
-        <h2 id="connection-heading">{isReceiver ? 'Receive over Wi-Fi' : 'Send over Wi-Fi'}</h2>
+        <h2 id="connection-heading">{t(isReceiver ? 'receiveWifi' : 'sendWifi')}</h2>
         <button className="secondary" type="button" onClick={() => {
           if (canDisconnect && session.current) end(session.current)
           else onReset()
         }}>
-          {canDisconnect ? 'Disconnect' : 'Start over'}
+          {t(canDisconnect ? 'disconnect' : 'startOver')}
         </button>
       </div>
-      <div role="status">{displayedStatus && <p className="status">{displayedStatus}</p>}</div>
-      {error && <p className="error" role="alert">{error}</p>}
+      <div role="status">{displayedStatus && <p className="status">{t(displayedStatus)}</p>}</div>
+      {error && <p className="error" role="alert">{t(error)}</p>}
 
       {showExchange && (
         <>
           {isReceiver && !localCode && (
             <div className="pairing">
-              <p>Create a pairing code to show to the sending device.</p>
+              <p>{t('createPairingCode')}</p>
               <button type="button" disabled={busy} onClick={() => void exchange('', 'text')}>
-                Create offer
+                {t('createOffer')}
               </button>
             </div>
           )}
           {!scanStage && showLocalCode && session.current?.sessionId && (
             <div className="pairing">
               <PairingHint device={isReceiver ? 'sending' : 'receiving'}>
-                {isReceiver ? (
-                  <>Choose <strong>Send</strong>, then <strong>Scan offer QR code</strong>. Scan the code below.</>
-                ) : (
-                  <>Choose <strong>Scan answer QR code</strong> on the Receive screen. Scan the code below.</>
-                )}
+                {isReceiver
+                  ? t({ key: 'showOfferHint', values: { send: t('send'), scan: t('scanOffer') } })
+                  : t({ key: 'showAnswerHint', values: { scan: t('scanAnswer') } })}
               </PairingHint>
               <PairingQr code={localCode} label={localLabel} />
             </div>
           )}
           {showRemoteInput && !isReceiver && canScan && (
             <PairingHint device="receiving">
-              Choose <strong>Receive</strong>, then <strong>Create offer</strong> to show the code.
+              {t({ key: 'getOfferHint', values: { receive: t('receive'), create: t('createOffer') } })}
             </PairingHint>
           )}
           {showRemoteInput && (
             scanStage ? (
               <div className="pairing">
-                <p>
-                  {isReceiver
-                    ? 'Fit the answer QR code from the sending device inside the camera guide.'
-                    : 'Fit the offer QR code from the receiving device inside the camera guide.'}
-                </p>
+                <p>{t(isReceiver ? 'fitAnswer' : 'fitOffer')}</p>
                 <QrCamera
                   decode={readQrCode}
                   onReady={() => setScanStage('scanning')}
                   onScan={(data) => void exchange(data, 'qr')}
                   onError={(message) => {
                     setScanStage(null)
-                    setStatus(`Could not scan the ${remoteLabel} QR code`)
+                    setStatus(isReceiver ? 'answerScanFailed' : 'offerScanFailed')
                     setError(message)
                   }}
                 />
                 <button className="secondary" type="button" onClick={() => setScanStage(null)}>
-                  Cancel scan
+                  {t('cancelScan')}
                 </button>
               </div>
             ) : canScan ? (
               <div className="pairing">
-                {isReceiver && <p>When the sending device shows its answer, scan it here.</p>}
+                {isReceiver && <p>{t('scanAnswerHere')}</p>}
                 <button type="button" disabled={busy} onClick={() => {
-                  setError('')
-                  setStatus(isReceiver ? 'Waiting for the answer' : '')
+                  setError(null)
+                  setStatus(isReceiver ? 'waitingForAnswer' : null)
                   setScanStage('starting')
                 }}>
-                  Scan {remoteLabel} QR code
+                  {t(isReceiver ? 'scanAnswer' : 'scanOffer')}
                 </button>
               </div>
             ) : (
-              <p>QR scanning requires camera access on an HTTPS page. You can use a text code here.</p>
+              <p>{t('useTextCodeInsecure')}</p>
             )
           )}
           {!scanStage && (showLocalCode || showRemoteInput) && (
             <details open={showRemoteInput && !canScan ? true : undefined}>
-              <summary>Use a text code</summary>
+              <summary>{t('useTextCode')}</summary>
               <form className="manual-code" onSubmit={(event) => {
                 event.preventDefault()
                 void exchange(remoteCode, 'text')
@@ -443,7 +459,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
                 {showRemoteInput && (
                   <>
                     <label>
-                      {isReceiver ? 'Answer from the sending device' : 'Offer from the receiving device'}
+                      {t(isReceiver ? 'answerFromSender' : 'offerFromReceiver')}
                       <textarea
                         rows={4}
                         maxLength={maxCodeLength + 1}
@@ -456,7 +472,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
                       />
                     </label>
                     <button type="submit" disabled={busy || !remoteCode.trim()}>
-                      {isReceiver ? 'Apply answer' : 'Create answer'}
+                      {t(isReceiver ? 'applyAnswer' : 'createAnswer')}
                     </button>
                   </>
                 )}
@@ -469,10 +485,10 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       {opened && (
         <>
           {messages.length > 0 && (
-            <ul className="messages" aria-label="Messages" aria-live="polite">
+            <ul className="messages" aria-label={t('messages')} aria-live="polite">
               {messages.map((entry) => (
                 <li key={entry.id}>
-                  <strong>{entry.lane === 'sent' ? 'You' : 'Other device'}</strong>
+                  <strong>{t(entry.lane === 'sent' ? 'you' : 'otherDevice')}</strong>
                   <span>{entry.text}</span>
                 </li>
               ))}
@@ -480,7 +496,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
           )}
           <form className="message-form" onSubmit={send}>
             <label>
-              Message
+              {t('message')}
               <input
                 value={message}
                 onChange={(event) => setMessage(event.target.value)}
@@ -488,15 +504,15 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
                 disabled={!connected}
               />
             </label>
-            <button type="submit" disabled={!connected || !message.trim()}>Send</button>
+            <button type="submit" disabled={!connected || !message.trim()}>{t('send')}</button>
           </form>
           {isReceiver ? (
             <ReceivedFiles update={fileUpdate} completed={completedFiles} />
           ) : (
             <form className="file-transfer" onSubmit={transferFiles} aria-labelledby="file-heading">
-              <h2 id="file-heading">Send files</h2>
+              <h2 id="file-heading">{t('sendFiles')}</h2>
               <label>
-                Files
+                {t('files')}
                 <input
                   type="file"
                   multiple
@@ -505,22 +521,22 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
                   onChange={(event) => {
                     const files = Array.from(event.currentTarget.files ?? [])
                     setSelectedFiles(files)
-                    setFileStatus('')
-                    setFileError('')
+                    setFileStatus(null)
+                    setFileError(null)
                   }}
                 />
               </label>
-              <p id="file-size-limit">Up to 25 MiB per file.</p>
+              <p id="file-size-limit">{t({ key: 'fileLimit', values: { limit: fileLimitMiB } })}</p>
               {selectedFiles.length > 0 && (
-                <ol className="file-list" aria-label="Files in send order">
+                <ol className="file-list" aria-label={t('filesSendOrder')}>
                   {selectedFiles.map((file, index) => <li key={index}>{file.name}</li>)}
                 </ol>
               )}
               <button type="submit" disabled={
                 !connected || !selectedFiles.length || Boolean(oversizedFile) || sendingFile
-              }>{selectedFiles.length > 1 ? 'Send files' : 'Send file'}</button>
-              <p role="status">{fileStatus}</p>
-              {displayedFileError && <p className="error" role="alert">{displayedFileError}</p>}
+              }>{t(selectedFiles.length > 1 ? 'sendFiles' : 'sendFile')}</button>
+              <p role="status">{fileStatus && t(fileStatus)}</p>
+              {displayedFileError && <p className="error" role="alert">{t(displayedFileError)}</p>}
             </form>
           )}
         </>
@@ -529,24 +545,26 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   )
 }
 
-function PairingHint({ device, children }: { device: 'sending' | 'receiving'; children: ReactNode }) {
+function PairingHint({ device, children }: { device: 'sending' | 'receiving'; children: string }) {
+  const { t } = useLanguage()
   return (
     <div className="pairing-hint">
-      <p className="pairing-hint-label">On the {device} device</p>
+      <p className="pairing-hint-label">{t(device === 'sending' ? 'sendingDevice' : 'receivingDevice')}</p>
       <p>{children}</p>
     </div>
   )
 }
 
 function ReceivedFiles({ update, completed }: { update: ActiveFileUpdate | null; completed: CompletedFile[] }) {
+  const { t } = useLanguage()
   return (
     <section className="file-transfer" aria-labelledby="file-heading">
-      <h2 id="file-heading">Receive files</h2>
-      {!update && !completed.length && <p>Files appear here when the other device sends them.</p>}
-      {update?.status === 'interrupted' && <p className="error" role="alert">{update.message}</p>}
+      <h2 id="file-heading">{t('receiveFiles')}</h2>
+      {!update && !completed.length && <p>{t('waitingForFiles')}</p>}
+      {update?.status === 'interrupted' && <p className="error" role="alert">{t(update.message)}</p>}
       {update?.status === 'receiving' && <FileProgress update={update} />}
       {completed.length > 0 && (
-        <ul className="file-list" aria-label="Received files">
+        <ul className="file-list" aria-label={t('receivedFiles')}>
           {completed.map((file, index) => (
             <li key={index}><FileDownload name={file.name} blob={file.blob} /></li>
           ))}
@@ -557,41 +575,45 @@ function ReceivedFiles({ update, completed }: { update: ActiveFileUpdate | null;
 }
 
 function FileProgress({ update }: { update: Extract<ActiveFileUpdate, { status: 'receiving' }> }) {
+  const { t } = useLanguage()
   const percent = update.size ? Math.floor((update.received * 100) / update.size) : 0
   return (
     <div className="file-progress">
-      <p>Receiving {update.name} · {percent}%</p>
-      <progress aria-label="File receive progress" value={update.received} max={update.size || 1} />
+      <p>{t({ key: 'receivingFile', values: { name: update.name, percent } })}</p>
+      <progress aria-label={t('fileProgress')} value={update.received} max={update.size || 1} />
     </div>
   )
 }
 
 function LocalCode({ code, label }: { code: string; label: 'Offer' | 'Answer' }) {
+  const { t } = useLanguage()
   const field = useRef<HTMLTextAreaElement>(null)
-  const [copyStatus, setCopyStatus] = useState('')
+  const [copyStatus, setCopyStatus] = useState<UiMessage | null>(null)
+  const copyLabel = label === 'Offer' ? 'copyOffer' : 'copyAnswer'
+  const selectLabel = label === 'Offer' ? 'selectOffer' : 'selectAnswer'
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(code)
-      setCopyStatus('Copied.')
+      setCopyStatus('copied')
     } catch {
       field.current?.focus()
       field.current?.select()
-      setCopyStatus('Selected. Use your device’s copy command.')
+      setCopyStatus('selectedCopy')
     }
   }
 
   return (
     <div className="code">
       <label>
-        {label} code
+        {t(label === 'Offer' ? 'offerCode' : 'answerCode')}
         <textarea ref={field} readOnly value={code} rows={4} spellCheck={false} />
       </label>
       <div className="actions">
         <button className="secondary" type="button" onClick={copy}>
-          {navigator.clipboard ? `Copy ${label.toLowerCase()}` : `Select ${label.toLowerCase()}`}
+          {t(navigator.clipboard ? copyLabel : selectLabel)}
         </button>
-        <span role="status">{copyStatus}</span>
+        <span role="status">{copyStatus && t(copyStatus)}</span>
       </div>
     </div>
   )

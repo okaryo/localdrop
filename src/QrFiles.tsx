@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { FileDownload } from './FileDownload'
+import { useLanguage } from './LanguageProvider'
 import { prepareQrCamera, QrCamera } from './QrExchange'
+import { errorMessage } from './i18n'
+import type { Message } from './i18n'
 import { renderQrImage } from './qr'
 import { maxQrFileSize, readQrFilePart, restoreQrFile, splitQrFile } from './qrFile'
 import type { QrFile } from './qrFile'
@@ -8,6 +11,7 @@ import type { QrFile } from './qrFile'
 type Parts = { digest: string; total: number; data: Map<number, Uint8Array<ArrayBuffer>> }
 
 export function QrFiles({ onBack }: { onBack: () => void }) {
+  const { t } = useLanguage()
   const [role, setRole] = useState<'send' | 'receive' | null>(null)
   const [preparation, setPreparation] = useState<'loading' | 'ready' | 'failed'>('loading')
   const supported = window.isSecureContext && Boolean(crypto.subtle)
@@ -25,27 +29,27 @@ export function QrFiles({ onBack }: { onBack: () => void }) {
   return (
     <section className="card" aria-labelledby="qr-files-heading">
       <div className="card-heading">
-        <h2 id="qr-files-heading">QR file transfer</h2>
+        <h2 id="qr-files-heading">{t('qrFileTransfer')}</h2>
         <button className="secondary" type="button" onClick={role ? () => setRole(null) : onBack}>
-          Back
+          {t('back')}
         </button>
       </div>
       {!supported ? (
-        <p role="alert">QR file transfer needs HTTPS or localhost. Open LocalDrop over a secure connection.</p>
+        <p role="alert">{t('qrSecureContext')}</p>
       ) : preparation === 'failed' ? (
-        <p role="alert">Could not prepare the QR reader. Reload this page while online.</p>
+        <p role="alert">{t('qrPreparationFailed')}</p>
       ) : preparation === 'loading' ? (
-        <p role="status">Preparing offline transfer…</p>
+        <p role="status">{t('preparingOffline')}</p>
       ) : role === 'send' ? (
         <SendByQr />
       ) : role === 'receive' ? (
         <ReceiveByQr />
       ) : (
         <>
-          <p role="status">Ready for offline transfer. Keep this page open on both devices.</p>
+          <p role="status">{t('offlineReady')}</p>
           <div className="actions">
-            <button type="button" onClick={() => setRole('send')}>Send by QR</button>
-            <button className="secondary" type="button" onClick={() => setRole('receive')}>Receive by QR</button>
+            <button type="button" onClick={() => setRole('send')}>{t('sendByQr')}</button>
+            <button className="secondary" type="button" onClick={() => setRole('receive')}>{t('receiveByQr')}</button>
           </div>
         </>
       )}
@@ -54,21 +58,22 @@ export function QrFiles({ onBack }: { onBack: () => void }) {
 }
 
 function SendByQr() {
+  const { t } = useLanguage()
   const [images, setImages] = useState<string[]>([])
   const [index, setIndex] = useState(0)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Message | null>(null)
 
   async function selectFile(file: File) {
     setImages([])
     setIndex(0)
-    setError('')
+    setError(null)
     setBusy(true)
     try {
       const parts = await splitQrFile(file)
       setImages(await Promise.all(parts.map(renderQrImage)))
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not prepare the file QR codes.')
+      setError(errorMessage(cause, 'qrFilePrepareFailed'))
     } finally {
       setBusy(false)
     }
@@ -77,7 +82,7 @@ function SendByQr() {
   return (
     <>
       <label>
-        File up to {maxQrFileSize / 1024} KiB
+        {t({ key: 'qrFileLimit', values: { limit: maxQrFileSize / 1024 } })}
         <input
           type="file"
           disabled={busy}
@@ -87,21 +92,21 @@ function SendByQr() {
           }}
         />
       </label>
-      {busy && <p role="status">Preparing file QR codes…</p>}
-      {error && <p className="error" role="alert">{error}</p>}
+      {busy && <p role="status">{t('preparingQrFiles')}</p>}
+      {error && <p className="error" role="alert">{t(error)}</p>}
       {images.length > 0 && (
         <div className="pairing">
-          <p role="status">QR code {index + 1} of {images.length}</p>
-          <img className="pairing-qr" src={images[index]} alt={`File QR code ${index + 1}`} />
+          <p role="status">{t({ key: 'qrFilePosition', values: { index: index + 1, total: images.length } })}</p>
+          <img className="pairing-qr" src={images[index]} alt={t({ key: 'fileQrAlt', values: { index: index + 1 } })} />
           {images.length > 1 && (
             <>
-              <p>Show the next code after the receiver scans this one.</p>
+              <p>{t('advanceQr')}</p>
               <div className="actions">
                 <button className="secondary" type="button" disabled={index === 0} onClick={() => setIndex(index - 1)}>
-                  Previous code
+                  {t('previousQr')}
                 </button>
                 <button type="button" disabled={index === images.length - 1} onClick={() => setIndex(index + 1)}>
-                  Next code
+                  {t('nextQr')}
                 </button>
               </div>
             </>
@@ -113,20 +118,21 @@ function SendByQr() {
 }
 
 function ReceiveByQr() {
+  const { t } = useLanguage()
   const incoming = useRef<Parts | null>(null)
   const [scan, setScan] = useState<'starting' | 'scanning' | null>(null)
   const [missing, setMissing] = useState<number[]>([])
   const [total, setTotal] = useState(0)
   const [file, setFile] = useState<QrFile | null>(null)
   const [verifying, setVerifying] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Message | null>(null)
 
   function reset() {
     incoming.current = null
     setMissing([])
     setTotal(0)
     setFile(null)
-    setError('')
+    setError(null)
   }
 
   async function accept(code: string) {
@@ -139,10 +145,10 @@ function ReceiveByQr() {
         data: new Map<number, Uint8Array<ArrayBuffer>>(),
       }
       if (transfer.digest !== part.digest || transfer.total !== part.total) {
-        setError('This code is for a different file. Continue with the current file or start over.')
+        setError('otherFileQr')
         return
       }
-      setError('')
+      setError(null)
       if (transfer.data.has(part.number)) return
       incoming.current = transfer
       transfer.data.set(part.number, part.bytes)
@@ -165,7 +171,7 @@ function ReceiveByQr() {
         setVerifying(false)
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not read the file QR code.')
+      setError(errorMessage(cause, 'fileQrReadFailed'))
     }
   }
 
@@ -173,13 +179,13 @@ function ReceiveByQr() {
     <>
       {total > 0 && (
         <div className="pairing" role="status">
-          <p>{total - missing.length} of {total} QR codes scanned</p>
-          {missing.length > 0 && <p>Still needed: {missing.join(', ')}</p>}
+          <p>{t({ key: 'qrCodesScanned', values: { count: total - missing.length, total } })}</p>
+          {missing.length > 0 && <p>{t({ key: 'missingQrCodes', values: { numbers: missing.join(', ') } })}</p>}
         </div>
       )}
       {scan ? (
         <div className="pairing">
-          <p role="status">{scan === 'starting' ? 'Starting camera…' : 'Keep each QR code inside the camera guide.'}</p>
+          <p role="status">{t(scan === 'starting' ? 'cameraStarting' : 'fitFileQr')}</p>
           <QrCamera
             continuous
             onReady={() => setScan('scanning')}
@@ -189,24 +195,24 @@ function ReceiveByQr() {
               setError(message)
             }}
           />
-          <button className="secondary" type="button" onClick={() => setScan(null)}>Pause scan</button>
+          <button className="secondary" type="button" onClick={() => setScan(null)}>{t('pauseScan')}</button>
         </div>
       ) : verifying ? (
-        <p role="status">Verifying file…</p>
+        <p role="status">{t('verifyingFile')}</p>
       ) : file ? (
         <FileDownload name={file.name} blob={file.blob} />
       ) : (
         <button type="button" onClick={() => {
-          setError('')
+          setError(null)
           setScan('starting')
-        }}>{total ? 'Resume scan' : 'Scan file QR codes'}</button>
+        }}>{t(total ? 'resumeScan' : 'scanFileQr')}</button>
       )}
-      {error && <p className="error" role="alert">{error}</p>}
+      {error && <p className="error" role="alert">{t(error)}</p>}
       {total > 0 && !verifying && (
         <button className="secondary" type="button" onClick={() => {
           setScan(null)
           reset()
-        }}>Start over</button>
+        }}>{t('startOver')}</button>
       )}
     </>
   )
