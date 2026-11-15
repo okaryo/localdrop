@@ -45,3 +45,5 @@ reach `main`. You can also run it from the **Actions** tab on `main`.
 After the workflow succeeds, open the URL shown by the deployment job.
 For this repository, the default URL is
 [okaryo.github.io/localdrop](https://okaryo.github.io/localdrop/).
+
+QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.

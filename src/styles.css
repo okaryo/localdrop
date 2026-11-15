@@ -206,3 +206,9 @@ summary {
 .manual-code {
   margin-top: 0.75rem;
 }
+
+.trademark {
+  margin-top: 1rem;
+  color: #40534e;
+  font-size: 0.875rem;
+}

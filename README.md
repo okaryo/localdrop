@@ -7,3 +7,5 @@ text messages over WebRTC.
 Try the [public prototype](https://okaryo.github.io/localdrop/).
 
 See the [development guide](docs/development.md) for local setup and testing.
+
+QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.

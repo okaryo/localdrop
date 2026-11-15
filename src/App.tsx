@@ -40,6 +40,9 @@ export function App() {
           </div>
         </section>
       )}
+      <footer className="trademark">
+        QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.
+      </footer>
     </main>
   )
 }
