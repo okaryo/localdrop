@@ -13,6 +13,8 @@ type ScanStage = 'starting' | 'scanning'
 type Lane = 'sent' | 'received'
 type Message = { id: number; lane: Lane; text: string }
 type ConnectionFailure = { status: string; message: string }
+type CompletedFile = Extract<ReceiveUpdate, { status: 'ready' }>
+type ActiveFileUpdate = Exclude<ReceiveUpdate, CompletedFile>
 type Session = {
   peer: RTCPeerConnection
   controller: AbortController
@@ -88,12 +90,15 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const [connected, setConnected] = useState(false)
   const [message, setMessage] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
-  const [fileUpdate, setFileUpdate] = useState<ReceiveUpdate | null>(null)
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [fileUpdate, setFileUpdate] = useState<ActiveFileUpdate | null>(null)
+  const [completedFiles, setCompletedFiles] = useState<CompletedFile[]>([])
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [sendingFile, setSendingFile] = useState(false)
   const [fileStatus, setFileStatus] = useState('')
   const [fileError, setFileError] = useState('')
   const remoteLabel = isReceiver ? 'answer' : 'offer'
+  const oversizedFile = selectedFiles.find((file) => file.size > maxFileSize)
+  const displayedFileError = fileError || (oversizedFile ? `${oversizedFile.name} exceeds the 25 MiB file limit.` : '')
   const displayedStatus = scanStage === 'starting'
     ? 'Starting camera…'
     : scanStage === 'scanning' ? `Looking for the ${remoteLabel} QR code…` : status
@@ -107,11 +112,20 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     setMessages((previous) => [...previous.slice(-49), entry])
   }
 
+  function showFileUpdate(update: ReceiveUpdate | null) {
+    if (!update) return
+    if (update.status === 'ready') {
+      setFileUpdate(null)
+      setCompletedFiles((files) => [...files, update])
+    } else {
+      setFileUpdate(update)
+    }
+  }
+
   function end(active: Session, failure?: ConnectionFailure) {
     if (active.controller.signal.aborted) return
     closeSession(active)
-    const interrupted = active.fileReceiver?.interrupt()
-    if (interrupted) setFileUpdate(interrupted)
+    if (active.fileReceiver) showFileUpdate(active.fileReceiver.interrupt())
     setScanStage(null)
     setConnected(false)
     setEnded(true)
@@ -160,8 +174,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       if (typeof event.data === 'string' && event.data.length <= messageLimit) {
         addMessage('received', event.data)
       } else if (event.data instanceof ArrayBuffer) {
-        const update = active.fileReceiver?.accept(event.data)
-        if (update) setFileUpdate(update)
+        if (active.fileReceiver) showFileUpdate(active.fileReceiver.accept(event.data))
       }
     }, { signal })
     channel.addEventListener('close', () => {
@@ -308,18 +321,22 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     }
   }
 
-  async function transferFile(event: FormEvent<HTMLFormElement>) {
+  async function transferFiles(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const active = session.current
-    const file = selectedFile
-    if (!connected || active?.channel?.readyState !== 'open' || !file || sendingFile) return
+    const channel = active?.channel
+    if (!connected || !active || channel?.readyState !== 'open' || !selectedFiles.length || oversizedFile || sendingFile) {
+      return
+    }
 
     setSendingFile(true)
     setFileError('')
-    setFileStatus('Sending file…')
     try {
-      await sendFile(active.channel, file, active.controller.signal)
-      setFileStatus('File sent.')
+      for (const [index, file] of selectedFiles.entries()) {
+        setFileStatus(`Sending ${index + 1} of ${selectedFiles.length} · ${file.name}`)
+        await sendFile(channel, file, active.controller.signal)
+      }
+      setFileStatus(selectedFiles.length === 1 ? 'File sent.' : `${selectedFiles.length} files sent.`)
     } catch (cause) {
       setFileStatus('')
       setFileError(active.controller.signal.aborted
@@ -335,13 +352,17 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const showLocalCode = Boolean(localCode) && !answerApplied
   const canScan = window.isSecureContext && Boolean(navigator.mediaDevices?.getUserMedia)
   const localLabel = isReceiver ? 'Offer' : 'Answer'
+  const canDisconnect = opened && !ended
 
   return (
     <section className="card" aria-labelledby="connection-heading">
       <div className="card-heading">
         <h2 id="connection-heading">{isReceiver ? 'Receive over Wi-Fi' : 'Send over Wi-Fi'}</h2>
-        <button className="secondary" type="button" onClick={onReset}>
-          {connected ? 'Disconnect' : 'Start over'}
+        <button className="secondary" type="button" onClick={() => {
+          if (canDisconnect && session.current) end(session.current)
+          else onReset()
+        }}>
+          {canDisconnect ? 'Disconnect' : 'Start over'}
         </button>
       </div>
       <div role="status">{displayedStatus && <p className="status">{displayedStatus}</p>}</div>
@@ -470,33 +491,36 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
             <button type="submit" disabled={!connected || !message.trim()}>Send</button>
           </form>
           {isReceiver ? (
-            <section className="file-transfer" aria-labelledby="file-heading">
-              <h2 id="file-heading">Receive a file</h2>
-              <ReceivedFile update={fileUpdate} />
-            </section>
+            <ReceivedFiles update={fileUpdate} completed={completedFiles} />
           ) : (
-            <form className="file-transfer" onSubmit={transferFile} aria-labelledby="file-heading">
-              <h2 id="file-heading">Send a file</h2>
+            <form className="file-transfer" onSubmit={transferFiles} aria-labelledby="file-heading">
+              <h2 id="file-heading">Send files</h2>
               <label>
-                File
+                Files
                 <input
                   type="file"
+                  multiple
                   aria-describedby="file-size-limit"
                   disabled={!connected || sendingFile}
                   onChange={(event) => {
-                    const file = event.currentTarget.files?.[0] ?? null
-                    setSelectedFile(file)
+                    const files = Array.from(event.currentTarget.files ?? [])
+                    setSelectedFiles(files)
                     setFileStatus('')
-                    setFileError(file && file.size > maxFileSize ? 'Choose a file up to 25 MiB.' : '')
+                    setFileError('')
                   }}
                 />
               </label>
               <p id="file-size-limit">Up to 25 MiB per file.</p>
+              {selectedFiles.length > 0 && (
+                <ol className="file-list" aria-label="Files in send order">
+                  {selectedFiles.map((file, index) => <li key={index}>{file.name}</li>)}
+                </ol>
+              )}
               <button type="submit" disabled={
-                !connected || !selectedFile || selectedFile.size > maxFileSize || sendingFile
-              }>Send file</button>
+                !connected || !selectedFiles.length || Boolean(oversizedFile) || sendingFile
+              }>{selectedFiles.length > 1 ? 'Send files' : 'Send file'}</button>
               <p role="status">{fileStatus}</p>
-              {fileError && <p className="error" role="alert">{fileError}</p>}
+              {displayedFileError && <p className="error" role="alert">{displayedFileError}</p>}
             </form>
           )}
         </>
@@ -514,15 +538,25 @@ function PairingHint({ device, children }: { device: 'sending' | 'receiving'; ch
   )
 }
 
-function ReceivedFile({ update }: { update: ReceiveUpdate | null }) {
-  if (!update) return <p>Files appear here when the other device sends them.</p>
-  if (update.status === 'interrupted') {
-    return <p className="error" role="alert">{update.message}</p>
-  }
-  if (update.status === 'ready') {
-    return <FileDownload name={update.name} blob={update.blob} />
-  }
+function ReceivedFiles({ update, completed }: { update: ActiveFileUpdate | null; completed: CompletedFile[] }) {
+  return (
+    <section className="file-transfer" aria-labelledby="file-heading">
+      <h2 id="file-heading">Receive files</h2>
+      {!update && !completed.length && <p>Files appear here when the other device sends them.</p>}
+      {update?.status === 'interrupted' && <p className="error" role="alert">{update.message}</p>}
+      {update?.status === 'receiving' && <FileProgress update={update} />}
+      {completed.length > 0 && (
+        <ul className="file-list" aria-label="Received files">
+          {completed.map((file, index) => (
+            <li key={index}><FileDownload name={file.name} blob={file.blob} /></li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
 
+function FileProgress({ update }: { update: Extract<ActiveFileUpdate, { status: 'receiving' }> }) {
   const percent = update.size ? Math.floor((update.received * 100) / update.size) : 0
   return (
     <div className="file-progress">

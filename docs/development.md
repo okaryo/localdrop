@@ -56,14 +56,14 @@ Use **Start over** on both devices to create a fresh pair of codes.
 
 ## Test file transfer
 
-After connecting, choose a file of up to 25 MiB on the sending device and
-select **Send file**. Watch the progress on the receiving device. When the
-transfer finishes, select **Download** and compare the saved file with the
-original.
+After connecting, select one or more files on the sending device. Each file
+can be up to 25 MiB. Choose **Send files** to send them one at a time in the
+order shown. The receiver can download each file as soon as it arrives.
 
-To test an interruption, disconnect the sending device during a transfer.
-The receiving device should report an interruption and offer no download
-for the unfinished file. Connect again to retry the transfer.
+To test an interruption, wait until the first file is available to download
+and disconnect either device while the next file is transferring. The
+receiver keeps completed downloads on the receiving screen and discards the
+unfinished file. Save completed files before choosing **Start over**.
 
 ## Build
 
