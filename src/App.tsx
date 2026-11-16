@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ExternalLink, Languages, LoaderCircle, QrCode, Wifi } from 'lucide-react'
+import { ArrowDown, ArrowUp, ExternalLink, Languages, LoaderCircle, Network, QrCode } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { FileDownload } from './FileDownload'
@@ -66,13 +66,13 @@ export function App() {
         <Connection role={role} onReset={() => setRole(null)} />
       ) : (
         <div className="mode-grid">
-          <section className="card mode-card wifi-mode" aria-labelledby="device-heading">
-            <div className="mode-icon"><Wifi size={25} aria-hidden="true" /></div>
-            <h2 id="device-heading">{t('wifiTransfer')}</h2>
+          <section className="card mode-card" aria-labelledby="device-heading">
+            <div className="mode-icon"><Network size={25} aria-hidden="true" /></div>
+            <h2 id="device-heading">{t('localNetworkTransfer')}</h2>
             {supported ? (
               <>
-                <p className="mode-description">{t('wifiModeDescription')}</p>
-                <p className="mode-note">{t('wifiStart')}</p>
+                <p className="mode-description">{t('networkModeDescription')}</p>
+                <p className="mode-note">{t('networkStart')}</p>
                 <div className="actions mode-actions">
                   <button onClick={() => setRole('receiver')}>
                     <ArrowDown size={17} aria-hidden="true" />
@@ -431,7 +431,7 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   return (
     <section className="card" aria-labelledby="connection-heading">
       <div className={showConnected ? 'connection-heading is-connected' : 'connection-heading'}>
-        <h2 id="connection-heading">{t(isReceiver ? 'receiveWifi' : 'sendWifi')}</h2>
+        <h2 id="connection-heading">{t(isReceiver ? 'receiveOverNetwork' : 'sendOverNetwork')}</h2>
         <button className="secondary" type="button" onClick={() => {
           if (canDisconnect && session.current) end(session.current)
           else onReset()

@@ -9,7 +9,7 @@ pnpm install --frozen-lockfile
 pnpm dev --host 0.0.0.0
 ```
 
-Connect both devices to the same Wi-Fi and open the **Network** URL printed by
+Connect both devices to the same network and open the **Network** URL printed by
 Vite in Chrome on both devices. If the page does not load, check that the
 computer running Vite allows incoming connections to the dev server.
 
@@ -23,7 +23,7 @@ that choice in the browser.
    tabs on one computer, the localhost URL printed by `pnpm preview` after
    `pnpm build`.
 2. Choose **QR file transfer** on both pages. Wait until both say **Ready for
-   offline transfer**, then turn off Wi-Fi and mobile data on the devices or
+   offline transfer**, then disconnect both devices from the network or
    set both tabs to **Offline** in Chrome DevTools. Keep the pages open.
 3. Choose **Send by QR** on one device and select a file of up to 4 KiB. On the
    receiving device, choose **Receive by QR** and then **Scan file QR codes**.
@@ -31,9 +31,9 @@ that choice in the browser.
    The receiver lists any missing codes, which can be scanned in any order.
 5. When every code has been read and the file verified, select **Download**.
 
-## Test the current prototype
+## Test local network pairing
 
-1. Open an HTTPS build in Chrome on both devices. Connect them to the same Wi-Fi.
+1. Open an HTTPS build in Chrome on both devices. Connect them to the same network, such as the same Wi-Fi.
 2. Choose **Receive** on the receiving device and select **Create offer**.
    Allow camera access if prompted. LocalDrop creates the offer after access is granted.
 3. Choose **Send** on the sending device, select **Scan offer QR code**, and
@@ -53,8 +53,8 @@ If pairing stops, check the status shown in the app:
 - **Could not apply the answer** means the browser rejected the answer. Check
   that it came from the offer still shown on the receiving device.
 - **Could not connect** means the devices could not start a transfer. Check
-  that both devices are on the same Wi-Fi. Some networks block connections
-  between devices, so try another Wi-Fi network if the problem continues.
+  that both devices are on the same network. Some networks block connections
+  between devices, so try another network if the problem continues.
 
 Use **Start over** on both devices to create a fresh pair of codes.
 
