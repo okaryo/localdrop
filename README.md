@@ -26,4 +26,10 @@ on the other. Scan each code and download the file when it is ready.
 
 See the [development guide](docs/development.md) for local setup and testing.
 
+## License
+
+LocalDrop's source code and documentation are available under the
+[MIT License](LICENSE). The app footer links to the licenses for bundled
+libraries.
+
 QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.

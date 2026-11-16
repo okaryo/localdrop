@@ -2,6 +2,7 @@
   "name": "localdrop",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@12.16.1",
   "engines": {
@@ -9,7 +10,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/publish-licenses.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

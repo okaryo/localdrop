@@ -15,6 +15,7 @@ const translations = {
   qrFileTransfer: ['QR file transfer', 'QRファイル転送'],
   trademark: ['QR Code is a registered trademark of DENSO WAVE INCORPORATED in Japan and in other countries.', 'QRコードは株式会社デンソーウェーブの登録商標です。'],
   repository: ['Source on GitHub', 'GitHubリポジトリ'],
+  thirdPartyLicenses: ['Third-party licenses', 'サードパーティのライセンス'],
   back: ['Back', '戻る'],
   startOver: ['Start over', '最初からやり直す'],
   disconnect: ['Disconnect', '切断'],
