@@ -51,7 +51,7 @@ export async function createLocalCode(
   const local = peer.localDescription
   if (!local?.sdp) throw new AppError(type === 'answer' ? 'answerFailed' : 'offerFailed')
   if (!/^a=candidate:.* typ host(?: |\r?$)/m.test(local.sdp)) {
-    throw new AppError('noCandidates')
+    throw new AppError('connectionHelp')
   }
 
   return JSON.stringify({ type: local.type, sdp: local.sdp, sessionId })
@@ -64,7 +64,7 @@ function waitForIceGathering(peer: RTCPeerConnection, signal: AbortSignal): Prom
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => {
       cleanup()
-      reject(new AppError('candidatesTimedOut'))
+      reject(new AppError('connectionHelp'))
     }, 10_000)
 
     function cleanup() {

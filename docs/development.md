@@ -52,11 +52,9 @@ If pairing stops, check the status shown in the app:
   code. Keep the entire code in the camera guide, or try the text option.
 - **Could not apply the answer** means the browser rejected the answer. Check
   that it came from the offer still shown on the receiving device.
-- **WebRTC connection timed out** means the answer was applied but no direct
-  connection was established. Check Wi-Fi client isolation, firewall settings,
-  and VPN settings.
-- **Data channel did not open** means WebRTC found a network path but could not
-  open the channel for file transfer.
+- **Could not connect** means the devices could not start a transfer. Check
+  that both devices are on the same Wi-Fi. Some networks block connections
+  between devices, so try another Wi-Fi network if the problem continues.
 
 Use **Start over** on both devices to create a fresh pair of codes.
 
