@@ -1,10 +1,28 @@
 # LocalDrop
 
-LocalDrop is a browser app in development for sharing files between nearby
-devices. The prototype sends files over WebRTC and can transfer files of up to
-4 KiB directly through QR codes.
+Send files to nearby devices over Wi-Fi, or use QR codes for small offline transfers.
 
-Try the [public prototype](https://okaryo.github.io/localdrop/).
+[Open LocalDrop](https://okaryo.github.io/localdrop/)
+
+## Wi-Fi transfer
+
+Connect both devices to the same Wi-Fi. Start with **Receive** on one device,
+then choose **Send** on the other and follow the QR pairing steps. Select one
+or more files to send directly between the devices over WebRTC.
+
+## Offline QR transfer
+
+Open **QR file transfer** on both devices before going offline. Wait until
+both are ready, then choose **Send by QR** on one device and **Receive by QR**
+on the other. Scan each code and download the file when it is ready.
+
+## Limits
+
+- Some Wi-Fi networks block connections between devices. Try another network
+  if the devices cannot connect.
+- Files over 25 MiB require a browser that lets the receiving device choose
+  where to save the file.
+- Offline QR transfer supports one file up to 4 KiB.
 
 See the [development guide](docs/development.md) for local setup and testing.
 
