@@ -1,12 +1,14 @@
 # LocalDrop
 
-Send files to nearby devices over a local network, or use QR codes for small offline transfers.
+Send files and text to nearby devices over a local network, or use QR codes for small offline file transfers.
 
 [Open LocalDrop](https://okaryo.github.io/localdrop/)
 
 ## Local network transfer
 
 Connect both devices to the same network, such as the same Wi-Fi. Start with **Receive** on one device, then choose **Send** on the other and follow the QR pairing steps. Select one or more files to send directly between the devices over WebRTC.
+
+To move copied text between devices, choose **Text** after pairing, paste the text, and select **Send text**. On the receiving device, choose **Copy text**.
 
 ## Offline QR transfer
 
@@ -16,6 +18,7 @@ Open **QR file transfer** on both devices before going offline. Wait until both 
 
 - Some networks block connections between devices, even on the same Wi-Fi. Try another network if the devices cannot connect.
 - Files over 25 MiB require a browser that lets the receiving device choose where to save the file.
+- Each text message can contain up to 16 KiB of UTF-8 text.
 - Offline QR transfer supports one file up to 4 KiB.
 
 See the [development guide](docs/development.md) for local setup and testing.
