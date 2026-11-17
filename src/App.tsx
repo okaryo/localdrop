@@ -10,6 +10,7 @@ import type { ReceiveUpdate } from './fileTransfer'
 import { AppError, errorMessage } from './i18n'
 import type { Message as UiMessage } from './i18n'
 import { readQrCode } from './qr'
+import { isTextTooLarge, maxTextBytes, textCapability } from './textTransfer'
 import { useScreenWakeLock } from './useScreenWakeLock'
 import { createLocalCode, maxCodeLength, readDescription } from './webrtc'
 
@@ -163,6 +164,9 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
   const [sendingFile, setSendingFile] = useState(false)
   const [fileStatus, setFileStatus] = useState<UiMessage | null>(null)
   const [fileError, setFileError] = useState<UiMessage | null>(null)
+  const [canSendText, setCanSendText] = useState(false)
+  const [sendMode, setSendMode] = useState<'files' | 'text'>('files')
+  const [receivedTexts, setReceivedTexts] = useState<string[]>([])
   const oversizedFile = canSendLargeFiles ? undefined : selectedFiles.find((file) => file.size > maxFileSize)
   const displayedFileError: UiMessage | null = fileError ?? (oversizedFile
     ? { key: 'fileTooLarge', values: { name: oversizedFile.name, limit: fileLimitMiB } }
@@ -225,10 +229,26 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       setConnected(true)
       setStatus('connected')
       active.fileReceiver?.advertise()
+      if (isReceiver && channel.readyState === 'open') {
+        try {
+          channel.send(textCapability)
+        } catch {
+          // Text sending stays unavailable if the capability cannot be advertised.
+        }
+      }
     }
 
     channel.addEventListener('open', onOpen, { signal })
     channel.addEventListener('message', (event) => {
+      if (typeof event.data === 'string') {
+        const data = event.data
+        if (isReceiver) {
+          if (data && !isTextTooLarge(data)) setReceivedTexts((texts) => [...texts, data])
+        } else if (data === textCapability) {
+          setCanSendText(true)
+        }
+        return
+      }
       if (!(event.data instanceof ArrayBuffer)) return
       if (active.fileReceiver) showFileUpdate(active.fileReceiver.accept(event.data))
       else if (advertisesLargeFiles(event.data)) setCanSendLargeFiles(true)
@@ -418,6 +438,17 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
     }
   }
 
+  function transferText(value: string) {
+    const channel = session.current?.channel
+    if (!connected || !canSendText || channel?.readyState !== 'open') return false
+    try {
+      channel.send(value)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   const showRemoteInput = isReceiver ? Boolean(localCode) && !answerApplied : !localCode
   const showExchange = !opened && !ended
   const showLocalCode = Boolean(localCode) && !answerApplied
@@ -546,51 +577,78 @@ function Connection({ role, onReset }: { role: Role; onReset: () => void }) {
       )}
 
       {opened && (
-        <>
+        <div className="transfer-content">
           {isReceiver ? (
-            <ReceivedFiles
-              update={fileUpdate}
-              completed={completedFiles}
-              onChooseDestination={() => void session.current?.fileReceiver?.chooseDestination()}
-              onDecline={() => session.current?.fileReceiver?.decline()}
-            />
-          ) : (
-            <form className="file-transfer" onSubmit={transferFiles} aria-labelledby="file-heading">
-              <h3 id="file-heading">{t('sendFiles')}</h3>
-              <label>
-                {t('files')}
-                <input
-                  type="file"
-                  multiple
-                  aria-describedby="file-size-limit"
-                  disabled={!connected || sendingFile}
-                  onChange={(event) => {
-                    const files = Array.from(event.currentTarget.files ?? [])
-                    setSelectedFiles(files)
-                    setFileStatus(null)
-                    setFileError(null)
-                  }}
-                />
-              </label>
-              <p id="file-size-limit">{t({
-                key: canSendLargeFiles ? 'largeFileLimitHint' : 'fileLimit', values: { limit: fileLimitMiB },
-              })}</p>
-              {selectedFiles.length > 0 && (
-                <ol className="file-list" aria-label={t('filesSendOrder')}>
-                  {selectedFiles.map((file, index) => <li key={index}>{file.name}</li>)}
-                </ol>
+            <>
+              {receivedTexts.length > 0 && (
+                <section className="text-transfer" aria-labelledby="received-text-heading">
+                  <h3 id="received-text-heading">{t('receivedTexts')}</h3>
+                  {receivedTexts.map((value, index) => (
+                    <CopyableText key={index} value={value} label="text" copyLabel="copyText" selectLabel="selectText" />
+                  ))}
+                </section>
               )}
-              <button type="submit" disabled={
-                !connected || !selectedFiles.length || Boolean(oversizedFile) || sendingFile
-              }>{t(selectedFiles.length > 1 ? 'sendFiles' : 'sendFile')}</button>
-              <p className="file-send-status" role="status">
-                {sendingFile && <LoaderCircle className="file-send-spinner" size={18} aria-hidden="true" />}
-                {fileStatus && <span>{t(fileStatus)}</span>}
-              </p>
-              {displayedFileError && <p className="error" role="alert">{t(displayedFileError)}</p>}
-            </form>
+              <ReceivedFiles
+                update={fileUpdate}
+                completed={completedFiles}
+                onChooseDestination={() => void session.current?.fileReceiver?.chooseDestination()}
+                onDecline={() => session.current?.fileReceiver?.decline()}
+              />
+            </>
+          ) : (
+            <>
+              {canSendText && (
+                <div className="actions" role="group" aria-label={t('sendContentType')}>
+                  <button className={sendMode === 'files' ? undefined : 'secondary'} type="button"
+                    aria-pressed={sendMode === 'files'} onClick={() => setSendMode('files')}>{t('files')}</button>
+                  <button className={sendMode === 'text' ? undefined : 'secondary'} type="button"
+                    aria-pressed={sendMode === 'text'} onClick={() => setSendMode('text')}>{t('text')}</button>
+                </div>
+              )}
+              <div hidden={sendMode !== 'files'}>
+                <form className="file-transfer" onSubmit={transferFiles} aria-labelledby="file-heading">
+                  <h3 id="file-heading">{t('sendFiles')}</h3>
+                  <label>
+                    {t('files')}
+                    <input
+                      type="file"
+                      multiple
+                      aria-describedby="file-size-limit"
+                      disabled={!connected || sendingFile}
+                      onChange={(event) => {
+                        const files = Array.from(event.currentTarget.files ?? [])
+                        setSelectedFiles(files)
+                        setFileStatus(null)
+                        setFileError(null)
+                      }}
+                    />
+                  </label>
+                  <p id="file-size-limit">{t({
+                    key: canSendLargeFiles ? 'largeFileLimitHint' : 'fileLimit', values: { limit: fileLimitMiB },
+                  })}</p>
+                  {selectedFiles.length > 0 && (
+                    <ol className="file-list" aria-label={t('filesSendOrder')}>
+                      {selectedFiles.map((file, index) => <li key={index}>{file.name}</li>)}
+                    </ol>
+                  )}
+                  <button type="submit" disabled={
+                    !connected || !selectedFiles.length || Boolean(oversizedFile) || sendingFile
+                  }>{t(selectedFiles.length > 1 ? 'sendFiles' : 'sendFile')}</button>
+                  <p className="file-send-status" role="status">
+                    {sendingFile && <LoaderCircle className="file-send-spinner" size={18} aria-hidden="true" />}
+                    {fileStatus && <span>{t(fileStatus)}</span>}
+                  </p>
+                  {displayedFileError && <p className="error" role="alert">{t(displayedFileError)}</p>}
+                </form>
+              </div>
+              {canSendText && (
+                <div hidden={sendMode !== 'text'}>
+                  <SendText connected={connected} onSend={transferText} />
+                </div>
+              )}
+            </>
           )}
-        </>
+        </div>
       )}
     </section>
   )
@@ -657,17 +715,75 @@ function FileProgress({ update }: { update: Extract<ActiveFileUpdate, { status: 
   )
 }
 
+function SendText({ connected, onSend }: { connected: boolean; onSend: (value: string) => boolean }) {
+  const { t } = useLanguage()
+  const [draft, setDraft] = useState('')
+  const [status, setStatus] = useState<'textSent' | 'textSendFailed' | null>(null)
+  const tooLarge = isTextTooLarge(draft)
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!connected || !draft || tooLarge) return
+    if (onSend(draft)) {
+      setDraft('')
+      setStatus('textSent')
+    } else {
+      setStatus('textSendFailed')
+    }
+  }
+
+  return (
+    <form className="text-transfer" onSubmit={submit} aria-labelledby="text-heading">
+      <label htmlFor="text-draft" id="text-heading">{t('textToSend')}</label>
+      <textarea
+        id="text-draft"
+        value={draft}
+        rows={5}
+        spellCheck={false}
+        aria-describedby="text-size-limit"
+        aria-invalid={tooLarge || undefined}
+        onChange={(event) => {
+          setDraft(event.currentTarget.value)
+          setStatus(null)
+        }}
+      />
+      <p id="text-size-limit" className={tooLarge ? 'error' : undefined} aria-live="polite">
+        {t({ key: tooLarge ? 'textTooLarge' : 'textLimit', values: { limit: maxTextBytes / 1024 } })}
+      </p>
+      <div className="actions">
+        <button type="submit" disabled={!connected || !draft || tooLarge}>{t('sendText')}</button>
+        <span role="status" className={status === 'textSendFailed' ? 'error' : undefined}>
+          {status && t(status)}
+        </span>
+      </div>
+    </form>
+  )
+}
+
 function LocalCode({ code, label }: { code: string; label: 'Offer' | 'Answer' }) {
+  return (
+    <CopyableText
+      value={code}
+      label={label === 'Offer' ? 'offerCode' : 'answerCode'}
+      copyLabel={label === 'Offer' ? 'copyOffer' : 'copyAnswer'}
+      selectLabel={label === 'Offer' ? 'selectOffer' : 'selectAnswer'}
+    />
+  )
+}
+
+function CopyableText({ value, label, copyLabel, selectLabel }: {
+  value: string
+  label: UiMessage
+  copyLabel: UiMessage
+  selectLabel: UiMessage
+}) {
   const { t } = useLanguage()
   const field = useRef<HTMLTextAreaElement>(null)
   const [copyStatus, setCopyStatus] = useState<UiMessage | null>(null)
 
-  const copyLabel = label === 'Offer' ? 'copyOffer' : 'copyAnswer'
-  const selectLabel = label === 'Offer' ? 'selectOffer' : 'selectAnswer'
-
   async function copy() {
     try {
-      await navigator.clipboard.writeText(code)
+      await navigator.clipboard.writeText(value)
       setCopyStatus('copied')
     } catch {
       field.current?.focus()
@@ -679,8 +795,8 @@ function LocalCode({ code, label }: { code: string; label: 'Offer' | 'Answer' })
   return (
     <div className="code">
       <label>
-        {t(label === 'Offer' ? 'offerCode' : 'answerCode')}
-        <textarea ref={field} readOnly value={code} rows={4} spellCheck={false} />
+        {t(label)}
+        <textarea ref={field} readOnly value={value} rows={4} spellCheck={false} />
       </label>
       <div className="actions">
         <button className="secondary" type="button" onClick={copy}>

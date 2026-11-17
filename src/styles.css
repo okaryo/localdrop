@@ -429,12 +429,16 @@ summary {
   text-underline-offset: 0.18em;
 }
 
+.transfer-content,
+.text-transfer,
 .file-transfer {
   display: grid;
   gap: 0.75rem;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
+.text-transfer h3,
 .file-transfer h3 {
   font-size: 1rem;
 }
